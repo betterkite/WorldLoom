@@ -30,8 +30,14 @@ const provenanceIndex = args.includes('--provenance') ? requiredOption('--proven
 const provenanceArtifactPath = args.includes('--provenance-artifact')
   ? requiredOption('--provenance-artifact')
   : null;
+const sbomProvenanceIndex = args.includes('--sbom-provenance')
+  ? requiredOption('--sbom-provenance')
+  : null;
 if (provenanceIndex && !provenanceArtifactPath) {
   throw new Error('--provenance-artifact is required with --provenance');
+}
+if (sbomProvenanceIndex && !provenanceArtifactPath) {
+  throw new Error('--provenance-artifact is required with --sbom-provenance');
 }
 const sbom = readJson(sbomPath);
 const image = Array.isArray(readJson(imagePath)) ? readJson(imagePath)[0] : readJson(imagePath);
@@ -60,6 +66,7 @@ if (labels['org.opencontainers.image.title'] !== 'WorldLoom') {
 }
 
 let provenance = null;
+let sbomProvenance = null;
 if (provenanceIndex) {
   provenance = readJson(provenanceIndex);
   if (!Array.isArray(provenance) || provenance.length === 0) {
@@ -76,6 +83,21 @@ if (provenanceIndex) {
   const attestedDigest = verified.statement.subject[0]?.digest?.sha256;
   if (attestedDigest !== archiveDigest) {
     throw new Error(`signed provenance subject mismatch: ${attestedDigest ?? 'missing'} != ${archiveDigest}`);
+  }
+}
+if (sbomProvenanceIndex) {
+  sbomProvenance = readJson(sbomProvenanceIndex);
+  if (!Array.isArray(sbomProvenance) || sbomProvenance.length === 0) {
+    throw new Error('signed SBOM attestation verification returned no attestations');
+  }
+  const verified = sbomProvenance[0]?.verificationResult;
+  if (!verified?.statement?.predicateType?.startsWith('https://cyclonedx.org/bom/')) {
+    throw new Error('signed SBOM attestation is not a CycloneDX predicate');
+  }
+  const archiveDigest = sha256(provenanceArtifactPath);
+  const attestedDigest = verified.statement.subject?.[0]?.digest?.sha256;
+  if (attestedDigest !== archiveDigest) {
+    throw new Error(`signed SBOM subject mismatch: ${attestedDigest ?? 'missing'} != ${archiveDigest}`);
   }
 }
 
@@ -111,7 +133,18 @@ const evidence = {
         predicateType: provenance[0].verificationResult.statement.predicateType,
         subjectCount: provenance[0].verificationResult.statement.subject.length,
         verificationSha256: sha256(provenanceIndex),
-        imageArchiveSha256: sha256(provenanceArtifactPath)
+        imageArchiveSha256: sha256(provenanceArtifactPath),
+        sbomAttestation: sbomProvenance
+          ? {
+              status: 'PASS',
+              verification: 'gh attestation verify',
+              predicateType: sbomProvenance[0].verificationResult.statement.predicateType,
+              verificationSha256: sha256(sbomProvenanceIndex)
+            }
+          : {
+              status: 'PENDING',
+              verification: null
+            }
       }
     : {
         status: 'PENDING',

@@ -255,6 +255,25 @@ jobs:
         if: github.event_name == 'push'
         run: cp "${{ steps.provenance.outputs.bundle-path }}" artifacts/worldloom-build-provenance.json
 
+      - name: Download dependency SBOM for signed attestation
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v7
+        with:
+          name: worldloom-sbom-${{ github.sha }}
+          path: artifacts/sbom
+
+      - name: Generate signed SBOM attestation
+        if: github.event_name == 'push'
+        id: sbom_attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/worldloom-image.tar
+          sbom-path: artifacts/sbom/worldloom-sbom.cdx.json
+
+      - name: Retain signed SBOM attestation bundle
+        if: github.event_name == 'push'
+        run: cp "${{ steps.sbom_attestation.outputs.bundle-path }}" artifacts/worldloom-sbom-attestation.json
+
       - name: Upload signed provenance evidence
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v7
@@ -264,6 +283,7 @@ jobs:
             artifacts/worldloom-image.tar
             artifacts/worldloom-image.tar.sha256
             artifacts/worldloom-build-provenance.json
+            artifacts/worldloom-sbom-attestation.json
           if-no-files-found: error
           retention-days: 30
 
@@ -350,6 +370,19 @@ jobs:
             --source-ref "refs/heads/main" \
             --format json > evidence/provenance/verification.json
 
+      - name: Verify signed SBOM attestation
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify evidence/provenance/worldloom-image.tar \
+            --bundle evidence/provenance/worldloom-sbom-attestation.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type "https://cyclonedx.org/bom" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref "refs/heads/main" \
+            --format json > evidence/provenance/sbom-verification.json
+
       - name: Correlate release evidence
         run: |
           provenance_args=()
@@ -357,6 +390,7 @@ jobs:
             provenance_args+=(
               --provenance evidence/provenance/verification.json
               --provenance-artifact evidence/provenance/worldloom-image.tar
+              --sbom-provenance evidence/provenance/sbom-verification.json
             )
           fi
           node scripts/verify-build-evidence.mjs \
