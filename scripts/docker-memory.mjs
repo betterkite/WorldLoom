@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -15,6 +15,7 @@ const MEMORY_UNITS = new Map([
 ]);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const ANSI_CONTROL_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 export function parseMemoryValue(value) {
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(B|KB|KiB|MB|MiB|GB|GiB|TB|TiB)$/i);
@@ -47,7 +48,10 @@ export function parseDockerStatsSnapshot(output) {
 
 function isLoopbackUrl(value) {
   try {
-    return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(new URL(value).hostname);
+    const url = new URL(value);
+    const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
+    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+    return loopback && port === '4310';
   } catch {
     return false;
   }
@@ -58,14 +62,19 @@ function unavailable(reason) {
     stop: async () => ({
       available: false,
       reason,
-      source: 'docker stats --no-stream'
+      source: 'docker stats streaming'
     })
-  };
+  }
 }
 
-/** Sample app/db/worker container memory for local Compose benchmarks only. */
-export async function startDockerMemorySampler({ baseUrl, intervalMs = 250 } = {}) {
-  if (!isLoopbackUrl(baseUrl ?? '')) return unavailable('benchmark target is not loopback');
+/**
+ * Sample app/db/worker container memory for local Compose benchmarks only.
+ * @param {{ baseUrl?: string, startupTimeoutMs?: number }} options
+ */
+export async function startDockerMemorySampler({ baseUrl, startupTimeoutMs = 8_000 } = {}) {
+  if (!isLoopbackUrl(baseUrl ?? '')) {
+    return unavailable('benchmark target is not the local Compose loopback port 4310');
+  }
 
   let containerIds;
   try {
@@ -81,59 +90,108 @@ export async function startDockerMemorySampler({ baseUrl, intervalMs = 250 } = {
   if (!containerIds.length) return unavailable('no local app/db/worker containers are running');
 
   const containers = new Map();
+  const expectedIds = new Set(containerIds.map((containerId) => containerId.slice(0, 12)));
   let samplingErrors = 0;
-  const sample = async () => {
-    try {
-      const { stdout } = await execFileAsync(
-        'docker',
-        [
-          'stats',
-          '--no-stream',
-          '--format',
-          '{{.ID}}\t{{.Name}}\t{{.MemUsage}}',
-          ...containerIds
-        ],
-        { timeout: 5_000, maxBuffer: 1024 * 1024 }
-      );
-      for (const row of parseDockerStatsSnapshot(stdout)) {
-        const previous = containers.get(row.containerId);
-        containers.set(row.containerId, {
-          containerId: row.containerId,
-          name: row.name,
-          baselineBytes: previous?.baselineBytes ?? row.usedBytes,
-          sampledPeakBytes: Math.max(previous?.sampledPeakBytes ?? 0, row.usedBytes),
-          latestBytes: row.usedBytes,
-          limitBytes: row.limitBytes,
-          samples: (previous?.samples ?? 0) + 1
-        });
-      }
-    } catch {
-      samplingErrors += 1;
-    }
+  const samplingStartedAt = Date.now();
+  const statsProcess = spawn(
+    'docker',
+    ['stats', '--format', '{{.ID}}\t{{.Name}}\t{{.MemUsage}}', ...containerIds],
+    { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TERM: 'dumb', NO_COLOR: '1' } }
+  );
+  let processClosed = false;
+  let samplingEndedAt = null;
+  let closeResolve;
+  const closePromise = new Promise((resolve) => {
+    closeResolve = resolve;
+  });
+  statsProcess.once('close', (code, signal) => {
+    processClosed = true;
+    samplingEndedAt = Date.now();
+    closeResolve({ code, signal });
+  });
+
+  let outputBuffer = '';
+  let initialResolve;
+  const initialSample = new Promise((resolve) => {
+    initialResolve = resolve;
+  });
+  let initialSettled = false;
+  const settleInitial = (ready) => {
+    if (initialSettled) return;
+    initialSettled = true;
+    initialResolve(ready);
   };
 
-  await sample();
-  if (!containers.size) return unavailable('Docker stats returned no container memory rows');
-  const samplingStartedAt = Date.now();
-
-  let active = true;
-  const samplingLoop = (async () => {
-    while (active) {
-      await sleep(intervalMs);
-      if (active) await sample();
+  statsProcess.stdout.setEncoding('utf8');
+  statsProcess.stdout.on('data', (chunk) => {
+    outputBuffer += chunk.replace(ANSI_CONTROL_SEQUENCE, '');
+    const lines = outputBuffer.split(/\r?\n/);
+    outputBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        for (const row of parseDockerStatsSnapshot(line)) {
+          const previous = containers.get(row.containerId);
+          containers.set(row.containerId, {
+            containerId: row.containerId,
+            name: row.name,
+            baselineBytes: previous?.baselineBytes ?? row.usedBytes,
+            sampledPeakBytes: Math.max(previous?.sampledPeakBytes ?? 0, row.usedBytes),
+            limitBytes: row.limitBytes,
+            samples: (previous?.samples ?? 0) + 1
+          });
+        }
+      } catch {
+        samplingErrors += 1;
+      }
+      if ([...expectedIds].every((containerId) => containers.has(containerId))) {
+        settleInitial(true);
+      }
     }
-  })();
+  });
+  statsProcess.once('error', () => {
+    samplingErrors += 1;
+    settleInitial(false);
+  });
+  statsProcess.once('close', () => settleInitial(false));
+
+  let startupTimer;
+  const started = await Promise.race([
+    initialSample,
+    new Promise((resolve) => {
+      startupTimer = setTimeout(() => resolve(false), startupTimeoutMs);
+    })
+  ]);
+  clearTimeout(startupTimer);
+  if (!started) {
+    if (!processClosed) statsProcess.kill('SIGINT');
+    await Promise.race([closePromise, sleep(1_000)]);
+    if (!processClosed) {
+      statsProcess.kill('SIGKILL');
+      await closePromise;
+    }
+    if (!containers.size) return unavailable('Docker stats returned no container memory rows');
+  }
 
   return {
     stop: async () => {
-      active = false;
-      await samplingLoop;
-      await sample();
-      const samplingWindowSeconds = Number(((Date.now() - samplingStartedAt) / 1000).toFixed(2));
+      if (!processClosed) statsProcess.kill('SIGINT');
+      await Promise.race([closePromise, sleep(1_000)]);
+      if (!processClosed) {
+        statsProcess.kill('SIGKILL');
+        await closePromise;
+      }
+      const samplingWindowSeconds = Number(
+        (((samplingEndedAt ?? Date.now()) - samplingStartedAt) / 1000).toFixed(2)
+      );
+      const missingContainerIds = [...expectedIds].filter((id) => !containers.has(id));
       return {
         available: containers.size > 0,
-        source: 'docker stats --no-stream',
-        pollDelayMs: intervalMs,
+        source: 'docker stats streaming',
+        expectedContainers: expectedIds.size,
+        observedContainers: containers.size,
+        complete: missingContainerIds.length === 0,
+        missingContainerIds,
         samplingWindowSeconds,
         peakIsSampled: true,
         samplingErrors,

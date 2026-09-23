@@ -21,7 +21,7 @@ const BASE = process.argv[2] ?? 'http://localhost:4310';
 const ENTITY_COUNT = 500;
 const EVENT_COUNT = 2000;
 const WARMUP_COUNT = 2;
-const SAMPLE_COUNT = 12;
+const SAMPLE_COUNT = 100;
 const MAX_P95_MS = 1500;
 const MAX_RSS_DELTA_MIB = 256;
 const PREFIX = 'WorldLoom-检索基准-';
@@ -121,6 +121,8 @@ async function main() {
       baseUrl: BASE,
       scale: { entities: ENTITY_COUNT, events: EVENT_COUNT, relations: 0 },
       samples: SAMPLE_COUNT,
+      requestConcurrency: 1,
+      requestPattern: 'sequential single-client',
       latencyMs: {
         min: Number(Math.min(...durations).toFixed(1)),
         p50: Number(percentile(durations, 0.5).toFixed(1)),

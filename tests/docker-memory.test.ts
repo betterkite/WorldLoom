@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseDockerStatsSnapshot, parseMemoryValue } from '../scripts/docker-memory.mjs';
+import {
+  parseDockerStatsSnapshot,
+  parseMemoryValue,
+  startDockerMemorySampler
+} from '../scripts/docker-memory.mjs';
 
 describe('Docker memory snapshot parser', () => {
   it('parses binary and decimal Docker memory units', () => {
@@ -35,5 +39,21 @@ describe('Docker memory snapshot parser', () => {
     expect(() => parseDockerStatsSnapshot('worldloom-app 54MiB / 2GiB')).toThrow(
       'invalid Docker stats row'
     );
+  });
+
+  it('never attributes local Compose memory to a remote benchmark target', async () => {
+    const sampler = await startDockerMemorySampler({ baseUrl: 'https://worldloom.example' });
+    await expect(sampler.stop()).resolves.toMatchObject({
+      available: false,
+      reason: 'benchmark target is not the local Compose loopback port 4310'
+    });
+  });
+
+  it('does not attribute Compose memory when a local benchmark uses another port', async () => {
+    const sampler = await startDockerMemorySampler({ baseUrl: 'http://127.0.0.1:4311' });
+    await expect(sampler.stop()).resolves.toMatchObject({
+      available: false,
+      reason: 'benchmark target is not the local Compose loopback port 4310'
+    });
   });
 });

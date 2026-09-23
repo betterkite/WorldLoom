@@ -56,7 +56,7 @@ pnpm dev                        # http://localhost:4310
 | `pnpm e2e` | 真实浏览器端到端旅程（Playwright，需已 build 并可访问服务） |
 | `pnpm run audit` | 全量可用性审计：治理链播种 + 全部 API + 全部页面（50 项 PASS/FAIL） |
 | `node scripts/ui-shots.mjs` · `node scripts/ui-acceptance.mjs` | 页面验收：播种演示世界 + 全页截图 · 程序化 UI 验收（结构/几何/可达性/渲染证据/交互） |
-| `pnpm benchmark:retrieval [url]` | 固定规模检索基准：500 entities + 2000 events，输出 P50/P95、基准驱动进程 RSS；目标为本地 loopback 时抽样记录 Compose app/db/worker 内存；自动清理临时世界。容器内存是采样峰值，不等同于目标硬件高水位或生产容量 |
+| `pnpm benchmark:retrieval [url]` | 固定规模检索基准：500 entities + 2000 events、100 个串行查询，输出 P50/P95、基准驱动进程 RSS；目标为本仓库 Compose 的 localhost/127.0.0.1:4310 时以 Docker stats 流抽样记录 app/db/worker 内存；自动清理临时世界。容器内存是采样峰值，不等同于目标硬件高水位或生产容量 |
 | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` | 生成 CycloneDX 1.5 生产依赖 SBOM，包含 lockfile 摘要和源码 revision |
 | `pnpm db:backup:drill` | 在临时数据库执行 custom-format PostgreSQL 备份/恢复演练并自动清理，不替代生产备份系统 |
 | `pnpm worker:chaos-smoke -- --timeout-ms=300000 --entities=512` | 隔离 Compose 中实际 kill/restart worker，验证 stale lease 恢复与向量幂等；仅为 E2 演练 |

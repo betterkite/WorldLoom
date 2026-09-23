@@ -4,12 +4,12 @@
 `PASS` 都必须能由部署方提供可复核的原始记录、命令输出、监控截图/导出、工单或报告链接。
 没有证据时必须写 `PENDING`，不得仅因为环境变量被设置为 `true` 就判定通过。
 
-**模板版本：** `1.4`　**适用范围：** WorldLoom 单次发布/变更　**默认时区：** UTC<br>
+**模板版本：** `1.5`　**适用范围：** WorldLoom 单次发布/变更　**默认时区：** UTC<br>
 **证据保管人：** `待填写`　**批准记录：** `待填写`　**最近修订：** `2026-09-24`
 
 **本版修订：** 补充部署范围/信任边界、控制责任和例外登记；明确 E0–E4 是 WorldLoom 内部证据分级而非
 行业认证等级；加强身份生命周期、API 滥用防护、漏洞披露/修复时限、provider 数据处理和加密/密钥轮换证据，
-并增加 NIST CSF 2.0 风险治理映射。此修订不代表项目已满足这些基线。
+并增加 NIST CSF 2.0 风险治理映射；本版再加入 NIST Privacy Framework 映射、OWASP API Security Top 10 和 CIS Docker Benchmark 的可验证检查项。此修订不代表项目已满足这些基线。
 
 ## 使用边界
 
@@ -130,7 +130,10 @@
 | --- | --- | --- |
 | NIST SSDF，SP 800-218 v1.1 | 以 PO / PS / PW / RV 实践组组织安全开发、软件保护、发布和漏洞响应证据；重点关注 `PS.3.2` 的发布来源/成分 provenance | `0`、`1.1`、`1.3`、`9`；记录源代码/构建/依赖/发布身份、扫描结果和漏洞处理闭环 |
 | NIST CSF 2.0 | 以组织风险治理和六项核心功能作高层结果映射；用于明确本次发布的责任、风险接受、保护/检测/响应/恢复能力，不作为逐条技术控制清单 | `0.2`、`0.4`、`1`、`5`、`8`、`9`、`12`；记录系统边界、责任、风险容忍、例外和恢复证据 |
+| NIST Privacy Framework 1.0 | 以自愿、风险驱动的隐私框架补充网络安全控制；记录数据处理目的、数据流、第三方处理、个人影响和隐私风险处置，不作为法律合规结论 | `0.4`、`4`、`8`、`9`；记录所选 Core/Profile、适用性、数据主体影响、保留/删除与跨境处理决定。法域法律义务另行评估 |
 | OWASP ASVS v5.0.0 | 用于应用及依赖其保护的环境技术控制验证；只登记本次部署实际适用的要求，不把此模板当作完整 ASVS 评估 | `3`、`4`、`9`；逐项记录固定版本的要求编号（格式 `v5.0.0-<编号>`）、适用性、测试方法、结果、证据和例外 |
+| OWASP API Security Top 10 2023 | 用作 API 风险分类与测试覆盖参考，不是认证或完整安全验证标准 | `3`、`4.1`、`4.3`；重点提供对象/属性/功能级授权、资源消耗、SSRF、API inventory 与第三方 API 响应校验的负向测试证据 |
+| CIS Docker Benchmark 1.8.0（仅 Docker Engine 部署） | 作为容器宿主机/daemon/运行时安全配置基线；只声明已逐项核对的适用建议，不把自动扫描分数视为完整安全证明 | `1.1`、`3.2`、`6`；固定 benchmark 版本、Docker Engine/Compose 版本、适用 recommendation ID、N/A 理由、扫描原始结果和批准例外。非 Docker 运行时须记录等效基线 |
 | OWASP Top 10 for LLM Applications 2025 | 用作 WorldLoom LLM/RAG/MCP 功能的风险识别提示，不是完整安全标准；按实际启用的模型、检索和工具能力选择风险项并记录验证 | `4.3`、`8`、`9`；重点核验 prompt injection、敏感信息泄露、不安全输出处理、供应链和过度代理权限 |
 | NIST AI 600-1，Generative AI Profile | 用于将生成式 AI 风险纳入生命周期治理、映射、测量和管理；作为自愿风险框架，不作为模型准确性/合规认证 | `0.4`、`4`、`8`、`9`；记录预期用途、风险容忍、评测数据/方法、人工监督和已知限制 |
 | SLSA v1.2 Build Track | 用于构建 provenance、制品身份、签名验证和消费者校验；只声明实际达到且验证过的 Build Level | `1.1`、`1.4`；关联部署制品 digest、trusted builder、签名验证输出、source revision 与 workflow/run |
@@ -140,6 +143,10 @@
 框架版本应在本次发布记录中固定，不能用“最新版”代替版本号。引用 ASVS 的要求时必须带版本前缀；
 若标准版本升级或适用范围变化，应重新评估映射，而非静默替换旧证据。ASVS、SSDF 等技术基线不能
 取代组织的法务/隐私判断、供应商合同、灾备义务或独立审计。
+
+版本注意：本模板将 NIST Privacy Framework 1.0 固定为已发布基线；截至本模板修订日 `2026-09-24`，NIST 官方页面将 Privacy Framework 1.1
+标为后续更新/公开草案阶段。只有在正式版本发布并完成差异评估后，才可在新证据包中采用 1.1，不得把草案当作
+已发布标准。CIS Docker Benchmark 仅适用于相应 Docker Engine 主机和运行时配置；托管容器平台应引用其实际平台基线。
 
 ### 0.4 发布范围、控制责任与例外
 
@@ -328,6 +335,42 @@ WorldLoom 当前是本地/受控主机应用，不自带多租户认证授权。
 | 入口扫描 | 外部端口、证书和安全扫描结果无未接受的高危项 | `待填写` | `PENDING / E0` | `EV-03` |
 | 应用安全验证 | 记录 ASVS 固定版本/目标等级、威胁模型范围、自动与人工测试覆盖；高风险暴露场景有针对性渗透/独立测试或书面风险接受 | `待填写` | `PENDING / E0` | `EV-03` |
 
+### 3.1 API 风险验证（OWASP API Security Top 10 2023）
+
+按本次实际 API inventory 逐项评估适用性，并在控制登记表中引用相应 `APIx:2023` 风险类别、端点/方法、测试身份、
+负向用例、期望拒绝结果和原始测试记录。不得只以通用 API 扫描器“无发现”代替授权与业务流测试。
+
+| 风险验证 | 最低证据要求 | 状态 / 等级 | 证据 |
+| --- | --- | --- | --- |
+| 认证（API2） | 验证登录/服务身份校验、令牌签名/受众/有效期、会话撤销、错误响应与暴力尝试限制；若认证由网关提供，需以端到端测试证明 API 无法绕过网关直接访问 | `PENDING / E0` | `EV-02` |
+| 对象级授权（API1）与功能级授权（API5） | 对世界、实体、事件、来源、运行记录和导出等对象，覆盖读取/创建/修改/删除/搜索等适用操作；用不同主体替换对象 ID、调用管理/worker 路由，确认无越权读写 | `PENDING / E0` | `EV-02` |
+| 对象属性授权（API3） | 对请求字段采用服务端 allowlist；测试额外字段、受保护字段、批量赋值及响应中过量属性，确认不能修改内部状态/权限且不泄露字段 | `PENDING / E0` | `EV-02` |
+| 不受限资源消耗（API4）与敏感业务流滥用（API6） | 验证请求体/上传/分页/解析深度/超时/并发/长任务和付费 provider 调用的单操作上限、速率限制、取消/排队及 429 行为；记录批准的限值和实测结果 | `PENDING / E0` | `EV-02`、`EV-04` |
+| SSRF（API7）与第三方 API 安全消费（API10） | 对 URL 导入、重定向、DNS 解析及私网/保留地址进行拒绝测试；provider 响应验证 TLS/目标、超时、字节上限、内容类型/schema 与错误处理；确认响应不进入未脱敏日志 | `PENDING / E0` | `EV-02`、`EV-04` |
+| 安全配置（API8）与 API inventory（API9） | 将 OpenAPI/路由清单与实际部署端点核对；覆盖 CORS、错误响应、默认配置、调试/弃用路由和版本暴露；差异有负责人和关闭期限 | `PENDING / E0` | `EV-02`、`EV-03` |
+
+若部署为单租户，应记录唯一信任主体、网络边界和未提供多租户隔离的事实；不得据此豁免公网认证、对象访问边界或
+资源消耗控制。若相关 API 风险确实不适用，控制登记表必须给出架构依据、风险接受人和复核日期。
+
+### 3.2 Docker 容器运行时硬化（CIS Docker Benchmark 1.8.0）
+
+仅在直接管理 Docker Engine 的部署中使用本节。对每项适用建议记录 CIS recommendation ID、Docker Engine/Compose
+版本、脱敏后的 `docker info`/`docker inspect`/Compose 配置、实测结果及原始证据哈希；不能仅记录扫描百分比。
+托管容器平台应记录平台安全基线及对应证据，并说明 Docker 主机控制由谁负责。
+
+| 检查项 | 期望结果 | 状态 / 等级 | 证据 |
+| --- | --- | --- | --- |
+| Daemon 暴露面与权限 | Docker daemon API 不向不可信网络暴露；部署/管理权限最小化；应用容器不挂载 Docker socket | `PENDING / E0` | `EV-02` |
+| 容器权限 | 应用/worker 以非 root 用户运行；不使用 privileged、host PID/network/IPC 或不必要的 Linux capabilities；例外逐项批准 | `PENDING / E0` | `EV-02`、`EV-07` |
+| 系统调用与提权防护 | 保留适用的 seccomp 与 AppArmor/SELinux 等强制访问控制；启用 no-new-privileges（若运行时支持）；禁用未使用能力 | `PENDING / E0` | `EV-02` |
+| 文件系统与挂载 | 能力允许时使用只读 root filesystem；可写目录限定到所需 volume/tmpfs，挂载只读优先，避免宽泛宿主机目录 | `PENDING / E0` | `EV-02`、`EV-09` |
+| 资源与日志上限 | 为 CPU、内存、PID、日志轮转/磁盘占用设置可验证上限；结合 worker 并发、数据库连接和 provider 限额检查总容量 | `PENDING / E0` | `EV-07`、`EV-08`、`EV-09` |
+| 网络隔离 | 仅代理对外提供入口；app、worker、数据库按职责分网；数据库不发布公网端口；出站访问按实际 provider/更新需求限制 | `PENDING / E0` | `EV-02` |
+| Secrets 与镜像 | secrets 通过受控运行时机制注入且不写入镜像/环境导出；运行镜像按 digest 固定并关联 SBOM、provenance 和漏洞报告 | `PENDING / E0` | `EV-01`、`EV-10` |
+
+若某项无法实施（例如只读文件系统与特定运行时行为不兼容），必须记录精确范围、原因、补偿控制、风险接受人和到期日；
+不得以容器隔离替代主机补丁、宿主机访问控制或生产网络边界审查。
+
 限流证据至少记录：维度（用户/IP/组织）、窗口、burst、并发上限、429 与 `Retry-After`、
 长任务/摄入/导出接口的单独策略，以及在压测中的 P95/P99 和错误比例。
 
@@ -510,7 +553,7 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 120/120 通过 | `E1` | `pnpm test` |
+| 单元/集成测试 | 125/125 通过（2026-09-24 本工作树复测；最终发布应以对应 commit 的 CI 为准） | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | 严格部署 preflight | 7 pass、15 failure；provider 凭据/价格快照配置通过，但运行预算和生产发布事实仍阻断发布 | `E1` | `pnpm deployment:preflight -- --strict` |
 | Provider 价格证据新鲜度 | 90 天内 HTTPS 来源元数据、核对日、模型版本和计费基准格式通过；测试会拒绝过期/未来日期及无效 URL，但不联网核对价格内容 | `E1` | `pnpm exec vitest run tests/deployment-pricing-evidence.test.ts` |
@@ -520,8 +563,8 @@ RPO/RTO。
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
-| 检索基准 | 2026-09-23 UTC 本机复测（macOS arm64、`Mac17,5`、6 CPU、8 GiB）：500 entities、2000 events，12 queries，P50 47.4ms、P95/max 66.3ms；基准驱动进程 RSS 增量 38.2 MiB。仅本机 E2 基线，非目标部署 SLO | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
-| 本地 Compose 服务内存抽样 | 同次检索基准期间 Docker `stats` 仅采到 3 个快照（4.07s）：app 93.3→251.0 MiB、DB 71.5→83.9 MiB、已加载本地模型的 worker 1559.6→1560.6 MiB；这些是稀疏采样值，不是 cgroup 高水位或容量结论；采样不适用于远程 URL | `E2 / 限定范围` | 基准输出 `serviceContainerMemory`；Docker `stats --no-stream`，250ms poll delay |
+| 检索基准 | 2026-09-23 UTC 本机复测（macOS arm64、`Mac17,5`、6 CPU、8 GiB）：500 entities、2000 events，100 个串行 queries，P50 38.2ms、P95 48.7ms、max 67.0ms；基准驱动进程 RSS 增量 68.6 MiB，本机脚本门槛通过。仅本机 E2 基线，非并发吞吐或目标部署 SLO | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
+| 本地 Compose 服务内存抽样 | 同次检索基准期间 Docker stats 流覆盖 6.01s、每容器 9 个快照：app 183.3→370.4 MiB、DB 47.1→59.8 MiB、已加载本地模型的 worker 1315.8 MiB；这些是抽样值，不是 cgroup 高水位或容量结论；只在 `localhost/127.0.0.1:4310` 采集当前仓库 Compose 指标 | `E2 / 限定范围` | 基准输出 `serviceContainerMemory`；Docker stats streaming，逐容器统计样本数 |
 | 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
 | 生产运行时镜像安全扫描（本地复测） | distroless Node 24 Debian 13，Trivy `os,library` 严格扫描 `CRITICAL,HIGH` 为 0；仅证明该构建与扫描时点 | `E1/E2` | `docker build ...`；Trivy JSON 报告与 SHA-256 归档 |
 | CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |
@@ -570,7 +613,10 @@ RPO/RTO。
 
 - [NIST SP 800-218 Secure Software Development Framework v1.1](https://csrc.nist.gov/pubs/sp/800/218/final)：安全开发、供应链和发布流程的风险驱动基线；NIST 明确该框架应用时应结合组织风险、适用性和资源定制，而不是机械照单执行。
 - [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework)：网络安全治理、风险管理与 Govern / Identify / Protect / Detect / Respond / Recover 结果的高层映射参考，不是认证或逐项技术检查清单。
+- [NIST Privacy Framework](https://www.nist.gov/privacy-framework)：隐私风险企业风险管理的自愿框架。本模板固定已发布的 v1.0；NIST 的 v1.1 页面标示为后续更新/公开草案，采用前须确认正式发布状态并重新评估映射。
 - [OWASP Application Security Verification Standard 5.0.0](https://owasp.org/projects/asvs)：Web 应用及其依赖环境技术控制的可验证要求；引用控制项时固定版本，使用 `v5.0.0-<requirement-id>` 格式。
+- [OWASP API Security Top 10 2023](https://owasp.org/www-project-api-security/)：API 风险识别、威胁建模和测试覆盖参考，不是认证标准；本模板将类别映射到可复核的负向测试。
+- [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)：Docker daemon、主机与容器运行时安全配置指南；本模板基于当前官方可获取的 1.8.0 版本，逐项适用性需结合部署环境确认。
 - [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/)：识别 LLM 应用提示注入、敏感信息泄露、输出处理、供应链和过度代理权限等风险的参考；不代表完整或通过验证。
 - [NIST AI 600-1 Generative AI Profile](https://doi.org/10.6028/NIST.AI.600-1)：将生成式 AI 风险纳入 AI RMF 生命周期风险管理的自愿参考。
 - [Google SRE Data Integrity](https://sre.google/sre-book/data-integrity/)：区分备份与可恢复性，要求以实际恢复能力、数据完整性和可接受的数据丢失量驱动设计。
