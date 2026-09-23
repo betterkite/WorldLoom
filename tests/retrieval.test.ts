@@ -6,6 +6,7 @@ import { mergeWorld } from '@/lib/governance/merge';
 import {
   enqueueSemanticIndex,
   getSemanticIndexStatus,
+  indexWorldSemantic,
   markSemanticIndexJobFailed,
   searchWorld
 } from '@/lib/retrieval/search';
@@ -260,6 +261,19 @@ describe('retrieval & assistant (Phase 4)', () => {
       if (previous === undefined) delete process.env[config.credentialEnv];
       else process.env[config.credentialEnv] = previous;
     }
+  });
+
+  it('cancels semantic indexing cleanly when its world is deleted mid-run', async () => {
+    const result = await indexWorldSemantic(fixture.worldId, async (texts) => {
+      await prisma.world.delete({ where: { id: fixture.worldId } });
+      return texts.map(() => [1, 0]);
+    });
+
+    expect(result).toMatchObject({
+      indexed: 0,
+      skipped: true,
+      reason: 'world_deleted_or_superseded'
+    });
   });
 
   it('A4-3: multi-hop expands causal neighbours of matched events', async () => {

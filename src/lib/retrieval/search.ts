@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import { tokenize, cosine } from './tokenizer';
 import { embed as defaultEmbed, EmbeddingError } from '@/lib/llm/embeddings';
@@ -474,19 +475,35 @@ export async function indexWorldSemantic(
 
   await options.onProgress?.();
   const vectors = await embedFn(targets.map((target) => target.text));
+  const currentWorld = await prisma.world.findUnique({
+    where: { id: worldId },
+    select: { masterVersion: true }
+  });
+  if (!currentWorld || currentWorld.masterVersion !== v) {
+    return { indexed: 0, skipped: true, reason: 'world_deleted_or_superseded' };
+  }
   const dims = vectors[0]?.length ?? 0;
   const embeddingModel =
     embedFn === defaultEmbed ? (getEmbeddingsConfig()?.model ?? null) : 'custom-test';
   for (let i = 0; i < targets.length; i += 1) {
     const hash = contentHash(targets[i].text);
-    await prisma.$executeRaw`
-      INSERT INTO semantic_vectors (id, "worldId", version, target_kind, "targetUid", content_hash, dims, embedding, "embeddingModel")
-      VALUES (${`sv_${targets[i].kind}_${targets[i].uid}`}, ${worldId}, ${v}, ${targets[i].kind}, ${targets[i].uid}, ${hash}, ${dims},
-        ${`[${vectors[i].join(',')}]`}::vector, ${embeddingModel})
-      ON CONFLICT (id) DO UPDATE SET
-        embedding = excluded.embedding, content_hash = excluded.content_hash,
-        dims = excluded.dims, version = excluded.version,
-        "embeddingModel" = excluded."embeddingModel", updated_at = now()`;
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO semantic_vectors (id, "worldId", version, target_kind, "targetUid", content_hash, dims, embedding, "embeddingModel")
+        VALUES (${`sv_${targets[i].kind}_${targets[i].uid}`}, ${worldId}, ${v}, ${targets[i].kind}, ${targets[i].uid}, ${hash}, ${dims},
+          ${`[${vectors[i].join(',')}]`}::vector, ${embeddingModel})
+        ON CONFLICT (id) DO UPDATE SET
+          embedding = excluded.embedding, content_hash = excluded.content_hash,
+          dims = excluded.dims, version = excluded.version,
+          "embeddingModel" = excluded."embeddingModel", updated_at = now()`;
+    } catch (error) {
+      // A world can be deleted while this detached background job is embedding.
+      // Treat PostgreSQL's FK violation as cancellation, not as a provider failure.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        return { indexed: i, skipped: true, reason: 'world_deleted_or_superseded' };
+      }
+      throw error;
+    }
     await options.onProgress?.();
   }
   return { indexed: targets.length, skipped: false };

@@ -194,7 +194,11 @@ export function getLocalEmbeddingsConfig(): z.infer<typeof localEmbeddingsSchema
 export function isLocalEmbeddingAvailable(): boolean {
   const config = getLocalEmbeddingsConfig();
   if (!config?.enabled) return false;
-  const modelDir = resolve(process.cwd(), config.cacheDir, config.model);
+  const modelDir = resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    config.cacheDir,
+    config.model
+  );
   return (
     existsSync(modelDir) &&
     existsSync(resolve(modelDir, 'config.json')) &&
