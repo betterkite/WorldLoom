@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 固定规模检索基准（ISS-30 P2）：
+ * 固定规模检索基准（ISS-34 P2）：
  *   500 entities + 2000 chronicle events，走真实 HTTP API，验证词法检索
  *   在目标规模下的 P50/P95、命中有效性和进程内存变化。
  *

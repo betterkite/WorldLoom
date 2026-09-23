@@ -4,8 +4,8 @@
 `PASS` 都必须能由部署方提供可复核的原始记录、命令输出、监控截图/导出、工单或报告链接。
 没有证据时必须写 `PENDING`，不得仅因为环境变量被设置为 `true` 就判定通过。
 
-**模板版本：** `1.1`　**适用范围：** WorldLoom 单次发布/变更　**默认时区：** UTC<br>
-**证据保管人：** `待填写`　**批准记录：** `待填写`　**最近修订：** `待填写`
+**模板版本：** `1.2`　**适用范围：** WorldLoom 单次发布/变更　**默认时区：** UTC<br>
+**证据保管人：** `待填写`　**批准记录：** `待填写`　**最近修订：** `2026-09-24`
 
 ## 使用边界
 
@@ -19,6 +19,7 @@
 - 发布证据按“原始记录、派生摘要、复核决定”分层保存；派生摘要不能替代原始记录。
 - 所有时间统一记录为 UTC；执行人、自动化身份和复核人必须可追溯到组织身份或变更系统账号。
 - 证据链接应使用不可变版本、运行 ID、报告编号或对象版本；只给可变的首页、截图或 mutable tag 不足以支持审计。
+- 本模板中的“必须/不得”是发布门禁要求，“应”是默认控制，“可”表示在记录理由后允许的实现选择；如组织政策更严格，以组织政策为准。
 
 ## 0. 证据包治理与可验证性
 
@@ -56,7 +57,52 @@
 `retentionUntil`、`classification`、`reviewer` 和每个对象的 `path`、`mediaType`、`sha256`、
 `sourceRunId`。若证据含个人数据、用户素材或 provider 响应，清单必须标明分类、脱敏方式和访问角色。
 
-### 0.1 发布放行规则
+建议 `manifest.json` 使用如下最小结构；示例中的值仅为占位符，不得原样作为真实发布证据：
+
+```json
+{
+  "schemaVersion": "worldloom.deployment-evidence/v1",
+  "evidencePackageId": "WL-REL-YYYY-NNN",
+  "sourceRevision": "<40-char-git-sha>",
+  "environment": { "name": "production", "region": "<region>", "cluster": "<cluster>" },
+  "generatedAt": "YYYY-MM-DDThh:mm:ssZ",
+  "retentionUntil": "YYYY-MM-DDT00:00:00Z",
+  "classification": "internal",
+  "reviewer": { "identity": "<account-or-ticket>", "reviewedAt": "YYYY-MM-DDThh:mm:ssZ" },
+  "objects": [
+    {
+      "id": "EV-01-raw-001",
+      "path": "raw/ci-run.json",
+      "mediaType": "application/json",
+      "sha256": "<64-hex>",
+      "sourceRunId": "<immutable-run-id>",
+      "containsPersonalData": false
+    }
+  ]
+}
+```
+
+### 0.1 证据新鲜度、保管链与脱敏
+
+证据等级不能替代证据新鲜度。每项证据必须同时满足“环境/版本匹配”和“仍在有效期内”；如果
+发布期间发生配置、镜像、schema、拓扑、数据规模或 provider 合同变化，应重新执行受影响的控制，
+不能沿用旧报告。
+
+| 证据域 | 默认有效期/触发重测条件 | 最低复核要求 |
+| --- | --- | --- |
+| 源码、构建、镜像、SBOM、provenance | 仅对记录的 commit、镜像 digest 和构建 run 有效 | digest、签名主体、源码 revision、生成时间四者一致 |
+| 漏洞扫描 | 必须针对本次部署 digest；扫描数据库时间不得晚于报告生成时间 | 记录 scanner、DB 版本/更新时间、策略和完整报告哈希 |
+| 备份与恢复 | 最近一次备份满足目标 RPO；恢复演练默认不超过 90 天，或按组织政策执行 | 记录恢复目标、RPO/RTO、完整性检查和临时数据清理 |
+| Worker/迁移/故障演练 | 最近一次拓扑、schema、运行时或重试策略变化后必须重测；否则默认不超过 90 天 | 记录故障注入时间线、任务最终状态、重复写入检查和复核人 |
+| 目标规模压测 | 目标硬件、版本、数据集或容量模型变化后必须重测；否则默认不超过 90 天 | 记录生成器版本、数据摘要、随机种子、预热、持续时间和错误定义 |
+| 告警、事件响应与隐私 | 关键联系人、告警路由、数据处理方或保留策略变化后必须重测；否则默认不超过 90 天 | 至少一次触发/撤销/升级记录，且不暴露秘密或未脱敏内容 |
+
+证据保管链至少记录：生成者、上传者、复核者、时间、对象版本、SHA-256、访问角色、保留期限和
+任何转存/脱敏动作。原始证据应写入受访问控制和不可变保留策略保护的存储；派生摘要或截图不能
+覆盖、替代或删除原始记录。含用户素材、provider 响应、访问日志或个人数据的证据必须先脱敏，
+并在清单中记录脱敏规则、执行者和复核结果。
+
+### 0.2 发布放行规则
 
 - `GO`：所有阻塞控制项为 `PASS`，关键项至少为 `E3`；供应链、漏洞、备份恢复、回滚和故障恢复均有原始记录与复核，不存在未到期的高危例外。
 - `CONDITIONAL GO`：仅允许在明确列出剩余风险、补偿控制、风险接受人、到期日和回滚触发条件后使用；不能把 `PENDING`、`FAIL` 或缺失的生产证据改名为 `CONDITIONAL`。
@@ -104,6 +150,10 @@
 | 复核人 | `待填写` |
 | 变更单 / 工单 / incident 关联 | `待填写` |
 | 回滚版本与触发条件 | `待填写` |
+| 变更等级 / 审批记录 | `待填写：standard / normal / emergency；变更单、批准人和时间` |
+| 发布策略 | `待填写：rolling / canary / blue-green；初始流量与放量条件` |
+| 发布前检查 | `待填写：备份、迁移、配置、依赖、容量和回滚点` |
+| 发布后观察窗口 | `待填写：持续时间、指标、阈值、值班人和结束条件` |
 
 发布身份必须能从 Git commit、镜像 digest、迁移版本和部署记录互相对上；任一项无法关联时，
 发布状态为 `NO-GO`。
@@ -124,7 +174,22 @@
 “有 CI 运行”不等于“制品可信”。至少要能从部署镜像反查源码、构建运行、SBOM 和 provenance；
 无法验证 subject digest、签名或漏洞例外时，`EV-01` 不得标记为 `PASS`。
 
-### 1.2 漏洞扫描与例外管理
+### 1.2 部署执行与发布后验证
+
+本节记录“证据已经具备”之后的实际发布动作，不能用 CI 通过代替。若使用 canary 或分批放量，
+每个阶段都要记录流量比例、开始/结束时间、观测指标和继续/暂停/回滚决定。
+
+| 检查项 | 期望结果 | 实际结果 | 状态 / 等级 | 证据 |
+| --- | --- | --- | --- | --- |
+| 发布前检查 | 变更单、备份、迁移计划、回滚点、告警静默范围和负责人均已确认 | `待填写` | `PENDING / E0` | `EV-11` |
+| 发布执行 | 实际部署的 commit、镜像 digest、schema 版本与发布身份一致 | `待填写` | `PENDING / E0` | `EV-11` |
+| 分批放量 | 每阶段满足错误率、延迟、队列、资源和业务 smoke 门槛后才放量 | `待填写` | `PENDING / E0` | `EV-11` |
+| 发布后 smoke | health、认证、核心读写、任务领取、检索/编译和关键 UI 链路通过 | `待填写` | `PENDING / E0` | `EV-11` |
+| 稳定性观察 | 观察窗口内 5xx/429、P95/P99、DB pool、worker stale、provider 预算拒绝无未接受异常 | `待填写` | `PENDING / E0` | `EV-11` |
+| 继续/暂停/回滚决定 | 决策人、时间、实际指标、阈值和理由已记录；回滚后再次执行 smoke | `待填写` | `PENDING / E0` | `EV-11` |
+| 变更收尾 | 关闭临时权限/静默/测试数据，更新版本、工单、证据索引和复盘事项 | `待填写` | `PENDING / E0` | `EV-11` |
+
+### 1.3 漏洞扫描与例外管理
 
 | 字段 | 发布记录 |
 | --- | --- |
@@ -142,7 +207,7 @@
 漏洞例外必须逐项记录漏洞 ID、受影响包/版本、是否可达、影响评估、修复可用性、补偿控制和到期日。
 没有风险接受与期限的例外不得进入 `CONDITIONAL GO`；已过期或与部署镜像 digest 不匹配时必须 `NO-GO`。
 
-### 1.3 供应链证据最低闭环
+### 1.4 供应链证据最低闭环
 
 发布包必须能按以下链路回溯：
 
@@ -165,6 +230,7 @@
 | 目标规模性能与容量 | `PENDING` | `E0` | `待填写` | `待填写` | `EV-08` | 是 |
 | 可观测性与告警 | `PENDING` | `E0` | `待填写` | `待填写` | `EV-09` | 是 |
 | 隐私、密钥与数据生命周期 | `PENDING` | `E0` | `待填写` | `待填写` | `EV-10` | 是 |
+| 部署执行与发布后验证 | `PENDING` | `E0` | `待填写` | `待填写` | `EV-11` | 是 |
 
 最终决策：`NO-GO / CONDITIONAL GO / GO`（删除不适用项前不得填写 `GO`）
 
@@ -369,6 +435,7 @@ RPO/RTO。
 | EV-08 | 目标规模性能容量 | `待填写` | `待填写` | `待填写` | `待填写` | `PENDING` |
 | EV-09 | 可观测性、告警、Runbook | `待填写` | `待填写` | `待填写` | `待填写` | `PENDING` |
 | EV-10 | 密钥、隐私、许可证 | `待填写` | `待填写` | `待填写` | `待填写` | `PENDING` |
+| EV-11 | 部署执行与发布后验证 | `待填写` | `待填写` | `待填写` | `待填写` | `PENDING` |
 
 ## 12. 最终签署
 
@@ -390,7 +457,7 @@ RPO/RTO。
 - [OWASP Application Security Verification Standard 5.0](https://owasp.org/projects/asvs)：Web 应用和依赖环境安全控制的可验证要求；引用控制项时应固定版本。
 - [Google SRE Data Integrity](https://sre.google/sre-book/data-integrity/)：区分备份与可恢复性，要求以实际恢复能力、数据完整性和可接受的数据丢失量驱动设计。
 - [Google Cloud Disaster Recovery Scenarios for Data](https://docs.cloud.google.com/architecture/dr-scenarios-for-data)：RPO/RTO、恢复目标与数据库备份/日志链路的记录方式参考。
-- [SLSA v1.0 Producing Artifacts](https://slsa.dev/spec/v1.0/requirements) 与 [Distributing Provenance](https://slsa.dev/spec/v1.0/distributing-provenance)：构建 provenance、制品摘要和验证链路参考。
+- [SLSA v1.2 specification](https://slsa.dev/spec/v1.2/)、[Producing Artifacts](https://slsa.dev/spec/v1.2/requirements) 与 [Distributing Provenance](https://slsa.dev/spec/v1.2/distributing-provenance)：构建 provenance、制品摘要和验证链路参考；若实现仍使用 v1 predicate，应在证据中固定 predicate 版本和验证方式。
 - [GitHub Artifact Attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) 与 [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify)：签名制品证明、subject 绑定和验证输出参考。
 - [Trivy image scanning](https://github.com/aquasecurity/trivy) 与 [Trivy Action](https://github.com/aquasecurity/trivy-action)：容器 OS/语言包漏洞扫描、阈值和 CI 集成参考。
 - [NIST SP 800-61 Rev. 3](https://csrc.nist.gov/pubs/sp/800/61/r3/final)：事件准备、检测、响应、恢复和复盘参考。
