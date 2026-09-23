@@ -29,4 +29,8 @@ describe('production compose migration gate', () => {
       'WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}'
     );
   });
+
+  it('passes the canonical public origin into the runtime container', () => {
+    expect(compose).toContain('NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}');
+  });
 });
