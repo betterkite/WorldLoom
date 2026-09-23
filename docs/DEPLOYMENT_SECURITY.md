@@ -75,6 +75,11 @@ DB 任务轮询。迁移服务失败时，Compose 不会满足 app/worker 的 `s
 条件。容器内默认连接 Compose 的 `db:5432`，自定义连接串使用 `WORLDLOOM_CONTAINER_DATABASE_URL`，
 避免把宿主机 `.env` 中的 `DATABASE_URL`（通常指向 `localhost`）误传入容器。
 
+在已准备本地 embedding 模型的 full Compose 环境中，可运行 `pnpm worker:smoke` 验证独立 worker
+实际领取一个 queued `SemanticIndexJob`、完成索引并持久化向量；该命令只创建带固定用途的临时世界，
+结束时通过级联删除清理。它是本地 `E2` runtime 证据，不能替代生产 worker 的故障注入、容量、跨主机
+lease 和滚动发布演练。
+
 ## 任务运行模型与规模边界
 
 `CompileRun/CompileChunk` 与 `SemanticIndexJob` 都是数据库持久化任务，具有 checkpoint、心跳和陈旧任务回收。当前 Next 进程会在提交请求后触发本地 runner，因此：
