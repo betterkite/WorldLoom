@@ -91,7 +91,8 @@ if (sbomProvenanceIndex) {
     throw new Error('signed SBOM attestation verification returned no attestations');
   }
   const verified = sbomProvenance[0]?.verificationResult;
-  if (!verified?.statement?.predicateType?.startsWith('https://cyclonedx.org/bom/')) {
+  const predicateType = verified?.statement?.predicateType;
+  if (predicateType !== 'https://cyclonedx.org/bom' && !predicateType?.startsWith('https://cyclonedx.org/bom/')) {
     throw new Error('signed SBOM attestation is not a CycloneDX predicate');
   }
   const archiveDigest = sha256(provenanceArtifactPath);
