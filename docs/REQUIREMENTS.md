@@ -1,4 +1,4 @@
-+# WorldLoom 需求说明
+# WorldLoom 需求说明
 
 ## 产品目标
 

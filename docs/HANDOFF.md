@@ -1,4 +1,4 @@
-+# WorldLoom 维护者说明
+# WorldLoom 维护者说明
 
 本文档只描述当前 WorldLoom 的架构、运行边界和接手入口。
 

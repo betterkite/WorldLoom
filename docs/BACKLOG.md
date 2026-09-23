@@ -1,4 +1,4 @@
-+# WorldLoom 后续任务
+# WorldLoom 后续任务
 
 任务按风险和依赖排序。已完成能力不在此重复登记，当前开放项见 [ISSUES.md](./ISSUES.md)。
 
