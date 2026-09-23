@@ -69,8 +69,9 @@ pnpm dev                        # http://localhost:4310
 DEEPSEEK_API_KEY=... docker compose --profile full up -d --build
 ```
 
-`--profile full` 会构建并启动应用容器（Next standalone 输出，端口 4310）；数据库健康后先运行一次性
-`prisma migrate deploy`，迁移失败时应用不会接收流量。镜像不含凭据，凭据由环境注入；容器内默认使用
+`--profile full` 会构建并启动应用容器和不暴露宿主端口的独立 worker 容器（均为 Next standalone
+镜像；worker 通过 `WORLDLOOM_WORKER=true` 启动 DB 任务轮询）；数据库健康后先运行一次性
+`prisma migrate deploy`，迁移失败时应用和 worker 都不会启动。镜像不含凭据，凭据由环境注入；容器内默认使用
 `db:5432`，如需自定义连接串请设置 `WORLDLOOM_CONTAINER_DATABASE_URL`，不要把宿主机的
 `DATABASE_URL=...localhost...` 直接传入容器。
 本地 embedding 模型不提交进镜像；需要语义索引时，请在部署镜像构建/启动前执行

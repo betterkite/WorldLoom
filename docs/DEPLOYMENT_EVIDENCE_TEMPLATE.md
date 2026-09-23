@@ -240,6 +240,7 @@ RPO/RTO。
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 检索基准 | 500 entities、2000 events，P95 57.2ms，RSS 增量 119.5 MiB | `E2` | `pnpm benchmark:retrieval http://localhost:4310` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
+| Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | CI / 容器 / E2E | 以对应 commit 的 GitHub Actions 为准 | `E1/E2` | `gh run view <run-id>` |
 
 ## 11. 证据索引

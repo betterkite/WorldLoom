@@ -2,6 +2,11 @@
 FROM node:24-slim AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable
+# Prisma's native query engine needs the system OpenSSL libraries at install,
+# build and runtime. Keep the same crypto/runtime baseline in every stage.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
 WORKDIR /app

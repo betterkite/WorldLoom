@@ -44,6 +44,28 @@ services:
       - '127.0.0.1:4310:4310'
     restart: unless-stopped
 
+  worker:
+    build: .
+    container_name: worldloom-worker
+    profiles: ['full']
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${WORLDLOOM_CONTAINER_DATABASE_URL:-postgresql://${POSTGRES_USER:-worldloom}:${POSTGRES_PASSWORD:-worldloom}@db:5432/${POSTGRES_DB:-worldloom}}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      BUILD_STANDALONE: 'true'
+      WORLDLOOM_WORKER: 'true'
+      WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}
+      WORLDLOOM_TLS_TERMINATED: ${WORLDLOOM_TLS_TERMINATED:-false}
+    # The worker uses the same standalone image but is not reachable through a
+    # published host port. Next instrumentation starts only the DB-backed poller.
+    restart: unless-stopped
+
   migrate:
     build:
       context: .

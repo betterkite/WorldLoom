@@ -69,10 +69,11 @@ pnpm deployment:preflight -- --strict
 `false` 或未设置，严格门禁应失败。
 建议使用 [部署证据记录模板](./DEPLOYMENT_EVIDENCE_TEMPLATE.md) 逐项留痕。
 
-`docker compose --profile full up -d --build` 会先运行一次性 `migrate` 服务，再启动 `app`；
-迁移服务失败时，Compose 不会满足 app 的 `service_completed_successfully` 条件。容器内默认连接
-Compose 的 `db:5432`，自定义连接串使用 `WORLDLOOM_CONTAINER_DATABASE_URL`，避免把宿主机
-`.env` 中的 `DATABASE_URL`（通常指向 `localhost`）误传入容器。
+`docker compose --profile full up -d --build` 会先运行一次性 `migrate` 服务，再启动 `app` 和不发布
+宿主端口的 `worker` 服务；worker 使用相同 standalone 镜像但固定 `WORLDLOOM_WORKER=true`，只运行
+DB 任务轮询。迁移服务失败时，Compose 不会满足 app/worker 的 `service_completed_successfully`
+条件。容器内默认连接 Compose 的 `db:5432`，自定义连接串使用 `WORLDLOOM_CONTAINER_DATABASE_URL`，
+避免把宿主机 `.env` 中的 `DATABASE_URL`（通常指向 `localhost`）误传入容器。
 
 ## 任务运行模型与规模边界
 

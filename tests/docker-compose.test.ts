@@ -28,10 +28,22 @@ describe('production compose migration gate', () => {
     );
   });
 
+  it('installs OpenSSL in every image stage for the Prisma runtime', () => {
+    expect(dockerfile).toContain('ca-certificates openssl');
+  });
+
   it('keeps the worker concurrency cap explicit in the app container', () => {
     expect(compose).toContain(
       'WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}'
     );
+  });
+
+  it('defines a separate full-profile worker without publishing a host port', () => {
+    const workerBlock = compose.match(/\n  worker:\n([\s\S]*?)(?=\n  migrate:)/)?.[1] ?? '';
+    expect(workerBlock).toContain('container_name: worldloom-worker');
+    expect(workerBlock).toContain("WORLDLOOM_WORKER: 'true'");
+    expect(workerBlock).toContain("profiles: ['full']");
+    expect(workerBlock).not.toContain('ports:');
   });
 
   it('passes the canonical public origin into the runtime container', () => {
