@@ -18,6 +18,10 @@ describe('production compose migration gate', () => {
     expect(compose).toContain('@db:5432/');
   });
 
+  it('keeps the development database bound to loopback only', () => {
+    expect(compose).toContain("'127.0.0.1:43133:5432'");
+  });
+
   it('keeps the database healthcheck aligned with custom database settings', () => {
     expect(compose).toContain(
       'pg_isready -U ${POSTGRES_USER:-worldloom} -d ${POSTGRES_DB:-worldloom}'
