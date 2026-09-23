@@ -210,7 +210,13 @@ jobs:
         run: docker build --target migrate --tag worldloom-migrate:ci .
 
       - name: Build production image
-        run: docker build --tag worldloom:ci .
+        run: |
+          docker build \
+            --build-arg VCS_REF="$GITHUB_SHA" \
+            --build-arg BUILD_DATE="${{ github.run_started_at }}" \
+            --build-arg VERSION="${{ github.sha }}" \
+            --tag worldloom:ci .
+          test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' worldloom:ci)" = "$GITHUB_SHA"
 
       - name: Full Compose runtime smoke test
         run: |

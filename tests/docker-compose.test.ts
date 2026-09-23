@@ -36,6 +36,12 @@ describe('production compose migration gate', () => {
     expect(dockerfile).toContain('ca-certificates openssl');
   });
 
+  it('embeds immutable source identity in the production image metadata', () => {
+    expect(dockerfile).toContain('org.opencontainers.image.source');
+    expect(dockerfile).toContain('org.opencontainers.image.revision');
+    expect(dockerfile).toContain('ARG VCS_REF=unknown');
+  });
+
   it('keeps local embedding runtime as a statically traceable server dependency', () => {
     expect(localEmbeddings).toContain("from '@huggingface/transformers'");
     expect(dockerfile).toContain('COPY --from=build /app/.next/standalone ./');

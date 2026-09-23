@@ -36,6 +36,14 @@ CMD ["pnpm", "db:deploy"]
 FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4310 HOSTNAME=0.0.0.0
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG VERSION=unknown
+LABEL org.opencontainers.image.title="WorldLoom" \
+  org.opencontainers.image.source="https://github.com/betterkite/WorldLoom" \
+  org.opencontainers.image.revision="${VCS_REF}" \
+  org.opencontainers.image.created="${BUILD_DATE}" \
+  org.opencontainers.image.version="${VERSION}"
 COPY --from=build /app/.next/standalone ./
 # Next traces the statically imported transformer package, but its ONNX/native
 # dependency closure is externalized. Copy only the lockfile-selected runtime
