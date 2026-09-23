@@ -36,10 +36,12 @@
 
 模型 profile 的 `pricing`、`limits.maxInputTokensPerRun`、`limits.maxOutputTokensPerRun` 和
 `limits.maxEstimatedCostUsdPerRun` 必须由部署方依据当前 provider 合同填写。当前
-`deepseek-official` 使用官方 `deepseek-flash` 的峰值、未命中缓存单价作为保守估算；DeepSeek
-价格会变化，部署前必须重新核对并按实际账户额度填写 limits。没有明确额度时，系统不会猜测
-每次运行上限，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在继续写入下一个
-候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
+`deepseek-official` 使用 [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+中 `deepseek-flash` 的峰值、未命中缓存单价作为保守估算（核对日：2026-09-23 UTC；input
+0.30 USD/M、output 1.20 USD/M）。DeepSeek 价格、峰谷时段和模型版本会变化，部署前必须
+重新核对并按实际账户额度填写 limits。公开价格不能推导账户余额或本次发布预算；没有明确额度
+时，系统不会猜测每次运行上限，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在
+继续写入下一个候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
 
 发布前可运行 `pnpm deployment:preflight` 做结构检查；脚本会读取被 Git 忽略的 `.env` 和
 `.env.local`（已导出的环境变量优先），只输出变量名和配置状态，不输出任何凭据。
