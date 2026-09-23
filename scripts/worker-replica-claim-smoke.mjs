@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * CI-only probe proving an individual Compose worker replica consumes a
- * durable SemanticIndexJob. The empty fixture intentionally follows the
- * application's safe "no content" terminal path, so this needs no provider,
- * model download, or external network service.
+ * durable SemanticIndexJob. The empty fixture intentionally follows a safe
+ * no-provider terminal path: either semantic retrieval is not configured, or
+ * the indexer reports no content. This needs no model or external service.
  *
  * The CI orchestrator leaves only the replica under test running while this
  * process creates the probe. It is copied into the app container and run
@@ -15,6 +15,10 @@ import { PrismaClient } from '@prisma/client';
 
 const timeoutMs = 45_000;
 const pollMs = 250;
+const expectedTerminalReasons = new Set([
+  'semantic retrieval is not enabled/configured',
+  'no content'
+]);
 const prisma = new PrismaClient({ log: ['error'] });
 let worldId;
 
@@ -50,7 +54,7 @@ async function main() {
       observed.attempts !== 1 ||
       observed.recoveryAttempts !== 0 ||
       observed.indexed !== 0 ||
-      observed.error !== 'no content' ||
+      !expectedTerminalReasons.has(observed.error ?? '') ||
       !observed.startedAt ||
       !observed.finishedAt
     ) {
