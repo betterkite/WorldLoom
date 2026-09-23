@@ -26,6 +26,13 @@ const revision = requiredOption('--revision');
 const sbomPath = requiredOption('--sbom');
 const imagePath = requiredOption('--image');
 const outputPath = requiredOption('--output');
+const provenanceIndex = args.includes('--provenance') ? requiredOption('--provenance') : null;
+const provenanceArtifactPath = args.includes('--provenance-artifact')
+  ? requiredOption('--provenance-artifact')
+  : null;
+if (provenanceIndex && !provenanceArtifactPath) {
+  throw new Error('--provenance-artifact is required with --provenance');
+}
 const sbom = readJson(sbomPath);
 const image = Array.isArray(readJson(imagePath)) ? readJson(imagePath)[0] : readJson(imagePath);
 const sourceRevision = sbom.metadata?.component?.properties?.find(
@@ -50,6 +57,26 @@ if (labels['org.opencontainers.image.revision'] !== revision) {
 }
 if (labels['org.opencontainers.image.title'] !== 'WorldLoom') {
   throw new Error('image title is not WorldLoom');
+}
+
+let provenance = null;
+if (provenanceIndex) {
+  provenance = readJson(provenanceIndex);
+  if (!Array.isArray(provenance) || provenance.length === 0) {
+    throw new Error('signed provenance verification returned no attestations');
+  }
+  const verified = provenance[0]?.verificationResult;
+  if (verified?.statement?.predicateType !== 'https://slsa.dev/provenance/v1') {
+    throw new Error('signed provenance is not SLSA v1 build provenance');
+  }
+  if (!Array.isArray(verified.statement.subject) || verified.statement.subject.length === 0) {
+    throw new Error('signed provenance has no subject');
+  }
+  const archiveDigest = sha256(provenanceArtifactPath);
+  const attestedDigest = verified.statement.subject[0]?.digest?.sha256;
+  if (attestedDigest !== archiveDigest) {
+    throw new Error(`signed provenance subject mismatch: ${attestedDigest ?? 'missing'} != ${archiveDigest}`);
+  }
 }
 
 const evidence = {
@@ -77,9 +104,22 @@ const evidence = {
     created: labels['org.opencontainers.image.created'],
     version: labels['org.opencontainers.image.version']
   },
+  provenance: provenance
+    ? {
+        status: 'PASS',
+        verification: 'gh attestation verify',
+        predicateType: provenance[0].verificationResult.statement.predicateType,
+        subjectCount: provenance[0].verificationResult.statement.subject.length,
+        verificationSha256: sha256(provenanceIndex),
+        imageArchiveSha256: sha256(provenanceArtifactPath)
+      }
+    : {
+        status: 'PENDING',
+        verification: null
+      },
   limitations: [
     'This index correlates source, SBOM, and image metadata at CI E1 level.',
-    'Signed provenance, registry digest verification, vulnerability exceptions, and independent review remain deployment evidence.'
+    'Registry digest verification, vulnerability exceptions, and independent review remain deployment evidence.'
   ]
 };
 
