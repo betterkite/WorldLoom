@@ -236,7 +236,7 @@ RPO/RTO。
 | 单元/集成测试 | 93/93 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |
-| UI 验收 | 22/22，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
+| UI 验收 | 37/37，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 检索基准 | 500 entities、2000 events，P95 57.2ms，RSS 增量 119.5 MiB | `E2` | `pnpm benchmark:retrieval http://localhost:4310` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |

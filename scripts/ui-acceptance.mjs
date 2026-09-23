@@ -40,6 +40,7 @@ async function auditPage(page, name, path, options = {}) {
   if (failedRequests.length) record(name, 'FAIL', '结构', `失败请求：${failedRequests.slice(0, 3).join('; ')}`);
 
   const geometry = await page.evaluate(() => {
+    const language = document.documentElement.lang;
     const docOverflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
     const vw = document.documentElement.clientWidth;
     const clipped = [];
@@ -115,9 +116,10 @@ async function auditPage(page, name, path, options = {}) {
       const self = c.getBoundingClientRect();
       return Boolean(parent && parent.height > 50 && self.height > parent.height + 8);
     });
-    return { docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, graphFallback, canvasOverflow };
+    return { language, docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, graphFallback, canvasOverflow };
   });
 
+  record(name, geometry.language === 'zh-CN' ? 'OK' : 'FAIL', '可访问性', `HTML lang=${geometry.language || '(empty)'}`);
   if (geometry.docOverflow > 2) record(name, 'FAIL', '几何', `页面横向溢出 ${geometry.docOverflow}px`);
   if (geometry.clipped.length) record(name, 'WARN', '几何', `文本被裁切：${geometry.clipped.slice(0, 3).join('; ')}`);
   if (geometry.offscreen.length) record(name, 'WARN', '几何', `元素越出视口：${geometry.offscreen.slice(0, 4).join(', ')}`);
