@@ -13,6 +13,12 @@
         "inputUsdPerMillion": 0.3,
         "outputUsdPerMillion": 1.2
       },
+      "pricingEvidence": {
+        "sourceUrl": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "checkedAt": "2026-09-23",
+        "modelVersion": "DeepSeek-V4.1-Flash",
+        "billingBasis": "peak input cache-miss and peak output rates; USD per million tokens"
+      },
       "limits": null
     },
     "modelport": {

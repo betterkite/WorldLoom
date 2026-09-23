@@ -2,6 +2,10 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  PROVIDER_PRICING_EVIDENCE_MAX_AGE_DAYS,
+  validateProviderPricingEvidence
+} from './provider-pricing-evidence.mjs';
 
 function loadEnvFile(fileName) {
   const filePath = resolve(process.cwd(), fileName);
@@ -93,6 +97,7 @@ function checkProfileBudget(profileId, profile) {
     pricing &&
     isFiniteNonNegative(pricing.inputUsdPerMillion) &&
     isFiniteNonNegative(pricing.outputUsdPerMillion);
+  const pricingEvidence = validateProviderPricingEvidence(profile.pricingEvidence);
   const limitsValid =
     limits &&
     Number.isInteger(limits.maxInputTokensPerRun) &&
@@ -107,12 +112,24 @@ function checkProfileBudget(profileId, profile) {
   else if (strict) fail(`${profileId}: provider pricing table is missing or invalid`);
   else warn(`${profileId}: provider pricing table is not configured`);
 
-  if (limitsValid && limits.maxEstimatedCostUsdPerRun !== null) {
-    pass(`${profileId}: token and estimated-cost limits are configured`);
+  if (pricingEvidence.valid) {
+    pass(`${profileId}: provider pricing evidence timestamp is recent (${pricingEvidence.ageDays} days old)`);
   } else if (strict) {
-    fail(`${profileId}: token and estimated-cost limits are missing or invalid`);
+    fail(
+      `${profileId}: provider pricing source snapshot is ${pricingEvidence.reason}; verify an HTTPS source, model version, billing basis, and checkedAt within ${PROVIDER_PRICING_EVIDENCE_MAX_AGE_DAYS} days`
+    );
   } else {
-    warn(`${profileId}: token and estimated-cost limits are not fully configured`);
+    warn(
+      `${profileId}: provider pricing source snapshot is ${pricingEvidence.reason}; strict deployment requires a current dated snapshot`
+    );
+  }
+
+  if (limitsValid && limits.maxEstimatedCostUsdPerRun !== null) {
+    pass(`${profileId}: CompileRun token and estimated-cost limits are configured`);
+  } else if (strict) {
+    fail(`${profileId}: CompileRun token and estimated-cost limits are missing or invalid`);
+  } else {
+    warn(`${profileId}: CompileRun token and estimated-cost limits are not fully configured`);
   }
 }
 

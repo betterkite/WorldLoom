@@ -99,6 +99,7 @@
 | --- | --- | --- |
 | 源码、构建、镜像、SBOM、provenance | 仅对记录的 commit、镜像 digest 和构建 run 有效 | digest、签名主体、源码 revision、生成时间四者一致 |
 | 漏洞扫描 | 必须针对本次部署 digest；扫描数据库时间不得晚于报告生成时间 | 记录 scanner、DB 版本/更新时间、策略和完整报告哈希 |
+| Provider 合同与价格 | 每次正式发布重新确认；若采用模板默认周期，核对时间不超过 90 天；模型/价格/峰谷计费改变时立即重测 | 记录官方价格来源、核对时间、模型版本、币种/单位、峰谷/缓存假设及批准的账户预算 |
 | 备份与恢复 | 最近一次备份满足目标 RPO；恢复演练默认不超过 90 天，或按组织政策执行 | 记录恢复目标、RPO/RTO、完整性检查和临时数据清理 |
 | Worker/迁移/故障演练 | 最近一次拓扑、schema、运行时或重试策略变化后必须重测；否则默认不超过 90 天 | 记录故障注入时间线、任务最终状态、恢复次数预算、重复写入检查和复核人 |
 | 目标规模压测 | 目标硬件、版本、数据集或容量模型变化后必须重测；否则默认不超过 90 天 | 记录生成器版本、数据摘要、随机种子、预热、持续时间和错误定义 |
@@ -310,6 +311,9 @@
 验收要求：价格和上限来自当前 provider 合同或批准的预算，而不是猜测；执行一次脱敏真实
 请求或受控 mock，证明超 token、超估算费用、usage 缺失和 provider 4xx/5xx 都有预期结果。
 
+`maxEstimatedCostUsdPerRun` 是基于 provider 已返回 usage 的应用侧停止阈值，不是账单硬上限；当前在途请求
+可能令实际费用超过阈值。若需要硬性支出限额，必须另附 provider 账户/项目限额或等效外部控制的实测证据。
+
 ### 4.2 Embedding 回退
 
 | 检查项 | 期望结果 | 实际结果 | 状态 / 等级 | 证据 |
@@ -438,10 +442,11 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 106/106 通过 | `E1` | `pnpm test` |
+| 单元/集成测试 | 111/111 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
-| 严格部署 preflight | 6 pass、15 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
-| 严格部署 preflight（显式运行时预算覆盖） | 7 pass、14 failure；provider token/estimated-cost limits 通过，生产网关、TLS、备份恢复、worker 拓扑、容量、供应链、可观测性和隐私等外部事实仍阻断发布 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
+| 严格部署 preflight | 7 pass、15 failure；provider 凭据/价格快照配置通过，但运行预算和生产发布事实仍阻断发布 | `E1` | `pnpm deployment:preflight -- --strict` |
+| Provider 价格证据新鲜度 | 90 天内 HTTPS 来源元数据、核对日、模型版本和计费基准格式通过；测试会拒绝过期/未来日期及无效 URL，但不联网核对价格内容 | `E1` | `pnpm exec vitest run tests/deployment-pricing-evidence.test.ts` |
+| 严格部署 preflight（显式运行时预算覆盖） | 8 pass、14 failure；配置化 CompileRun per-run token/estimated-cost soft guard 通过，但不代表其他 LLM 调用受累计预算保护、provider 账户硬支出上限或生产部署通过 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |

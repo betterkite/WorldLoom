@@ -33,6 +33,15 @@ const profileSchema = z.object({
     })
     .nullable()
     .optional(),
+  pricingEvidence: z
+    .object({
+      sourceUrl: z.string().url(),
+      checkedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      modelVersion: z.string().min(1),
+      billingBasis: z.string().min(1)
+    })
+    .nullable()
+    .optional(),
   limits: z
     .object({
       maxInputTokensPerRun: z.number().int().positive().nullable().default(null),

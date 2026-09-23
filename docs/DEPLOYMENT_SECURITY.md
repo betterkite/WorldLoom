@@ -37,11 +37,22 @@
 模型 profile 的 `pricing`、`limits.maxInputTokensPerRun`、`limits.maxOutputTokensPerRun` 和
 `limits.maxEstimatedCostUsdPerRun` 必须由部署方依据当前 provider 合同填写。当前
 `deepseek-official` 使用 [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
-中 `deepseek-flash` 的峰值、未命中缓存单价作为保守估算（核对日：2026-09-23 UTC；input
-0.30 USD/M、output 1.20 USD/M）。DeepSeek 价格、峰谷时段和模型版本会变化，部署前必须
+中 `deepseek-flash`（当前文档标示模型版本 `DeepSeek-V4.1-Flash`）的峰值、未命中缓存输入价与峰值输出价作为保守估算
+（核对日：2026-09-23 UTC；input 0.30 USD/M、output 1.20 USD/M）。价格表来源、核对日、模型版本和计费基准
+同时登记在 `config/llm.json`；严格 preflight 拒绝缺少 HTTPS 来源、未来日期或超过 90 天的价格快照。
+该自动检查只验证配置元数据和核对日期，不会联网抓取、比对价格页，也不能验证账户合同；发布负责人仍须
+人工确认来源、模型和计费口径。
+DeepSeek 价格、峰谷时段和模型版本会变化，部署前必须
 重新核对并按实际账户额度填写 limits。公开价格不能推导账户余额或本次发布预算；没有明确额度
 时，系统不会猜测每次运行上限，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在
-继续写入下一个候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
+每次 provider 响应后检查累计 token/估算成本，超限任务进入 failed 并停止后续请求。
+
+该应用侧预算是“已报告用量上的停止阈值”，不是 provider 账单硬上限：当前在途请求已经发生，响应后才有
+准确 usage；单次请求（或有界重试）可能使费用越过阈值。需要严格支出上限时，部署方必须另设并验证
+provider 账户/项目级额度或其他外部硬限额；不能把本应用的 `maxEstimatedCostUsdPerRun` 宣称为防超额账单保证。
+当前累计 per-run guard 仅覆盖持久化 `CompileRun`；问答、创世/推演、后续建议和评测裁判调用不共享此累计账本。
+这些路径的单次输出 token 上限不等于总预算，生产发布必须另以 provider 账户预算/配额和网关速率/并发限制
+覆盖这些调用，并在部署证据中说明已验证的范围。
 
 正式部署也可以通过 `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN`、
 `WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN` 和

@@ -242,6 +242,91 @@ describe('durable compiler runs (ISS-31)', () => {
     expect(await prisma.change.count({ where: { worldId } })).toBe(0);
   });
 
+  it('stops after a provider response exceeds the estimated-cost threshold', async () => {
+    const names = [
+      'WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN'
+    ] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      process.env.WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN = '100';
+      process.env.WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN = '100';
+      process.env.WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN = '0.000001';
+      const created = await createCompileRun(worldId, {
+        kind: 'source',
+        sourceFilename: '费用门禁.md',
+        sourceContent: '预算测试素材',
+        context: context()
+      });
+      let calls = 0;
+      const runner: ChatFn = async () => {
+        calls += 1;
+        return {
+          content: ANALYSIS,
+          profileId: 'deepseek-official',
+          model: 'deepseek-flash',
+          usage: { inputTokens: 10, outputTokens: 10 },
+          latencyMs: 1
+        };
+      };
+
+      const failed = await executeCompileRun(created.run.id, runner);
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toContain('estimated cost');
+      expect(calls).toBe(1);
+      expect(failed.chunks[0]?.analysisMeta).toBeNull();
+      expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+    }
+  });
+
+  it('fails closed on incomplete usage before issuing the next provider call', async () => {
+    const names = [
+      'WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN'
+    ] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      process.env.WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN = '100';
+      process.env.WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN = '100';
+      process.env.WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN = '1';
+      const created = await createCompileRun(worldId, {
+        kind: 'source',
+        sourceFilename: '用量缺失.md',
+        sourceContent: '用量完整性测试',
+        context: context()
+      });
+      let calls = 0;
+      const runner: ChatFn = async () => {
+        calls += 1;
+        return {
+          content: ANALYSIS,
+          profileId: 'deepseek-official',
+          model: 'deepseek-flash',
+          usage: null,
+          latencyMs: 1
+        };
+      };
+
+      const failed = await executeCompileRun(created.run.id, runner);
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toContain('provider usage is incomplete');
+      expect(calls).toBe(1);
+      expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+    }
+  });
+
   it('fails instead of staging against a newer world version', async () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
