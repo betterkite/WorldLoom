@@ -447,7 +447,7 @@ RPO/RTO。
 | 严格部署 preflight | 7 pass、15 failure；provider 凭据/价格快照配置通过，但运行预算和生产发布事实仍阻断发布 | `E1` | `pnpm deployment:preflight -- --strict` |
 | Provider 价格证据新鲜度 | 90 天内 HTTPS 来源元数据、核对日、模型版本和计费基准格式通过；测试会拒绝过期/未来日期及无效 URL，但不联网核对价格内容 | `E1` | `pnpm exec vitest run tests/deployment-pricing-evidence.test.ts` |
 | 严格部署 preflight（显式运行时预算覆盖） | 8 pass、14 failure；预算元数据门禁通过，但这些示例值仅演示脚本行为，未获用户/账户批准；应用层操作预算不等于 provider 账户硬支出上限，生产发布事实仍缺 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
-| LLM operation budget guard | 配置后累计覆盖持久化 CompileRun 与问答、创世、推演、答案评测；同步操作按单次业务操作计，输出上限按剩余额度收紧，缺 usage、超 token/估算费用后拒绝后续调用；这是响应后软停止，不是账户级限额 | `E1` | `pnpm test`；`tests/llm-usage-budget.test.ts` |
+| LLM operation budget guard | CI run [35898154828](https://github.com/betterkite/WorldLoom/actions/runs/35898154828)，revision `602f2e7a58c18b529d5fd2d520992e8741189c7c`：配置后累计覆盖持久化 CompileRun 与问答、创世、推演、答案评测；同步操作按单次业务操作计，输出上限按剩余额度收紧，缺 usage、超 token/估算费用或 profile 不匹配时拒绝后续调用；这是响应后软停止，不是账户级限额 | `E1` | `pnpm test`；`tests/llm-usage-budget.test.ts`；`tests/eval-answer.test.ts` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
