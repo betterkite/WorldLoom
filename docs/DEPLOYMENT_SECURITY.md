@@ -91,6 +91,11 @@ worker 重新领取（attempts 至少增加一次）、完成索引并只持久�
 并在 finally 中清理。它覆盖本地 stale-recovery 的 `E2` 契约，不等于生产进程杀停、跨主机 lease、
 容量或滚动发布证据。
 
+若要验证真实进程故障路径，可在 full Compose 已启动且本地 embedding 模型已准备后运行
+`pnpm worker:chaos-smoke -- --timeout-ms=300000 --entities=512`。该演练会创建临时世界，等待独立
+worker 领取任务，发送 `SIGKILL`，确认 Compose 重启、heartbeat lease 过期后重新领取，并验证 attempts
+增加、向量数量不重复；它仍是本地/隔离环境的 `E2` 证据，不能替代生产跨主机故障注入和容量验证。
+
 ## 任务运行模型与规模边界
 
 `CompileRun/CompileChunk` 与 `SemanticIndexJob` 都是数据库持久化任务，具有 checkpoint、心跳和陈旧任务回收。当前 Next 进程会在提交请求后触发本地 runner，因此：

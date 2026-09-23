@@ -36,6 +36,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "worker:smoke": "node scripts/worker-smoke.mjs",
+    "worker:chaos-smoke": "node scripts/worker-chaos-smoke.mjs",
     "worker:recovery-smoke": "node scripts/worker-smoke.mjs --stale-running"
   },
   "dependencies": {

@@ -59,6 +59,7 @@ pnpm dev                        # http://localhost:4310
 | `pnpm benchmark:retrieval [url]` | 固定规模检索基准：500 entities + 2000 events，输出 P50/P95/最大耗时与 RSS 变化并自动清理临时世界 |
 | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` | 生成 CycloneDX 1.5 生产依赖 SBOM，包含 lockfile 摘要和源码 revision |
 | `pnpm db:backup:drill` | 在临时数据库执行 custom-format PostgreSQL 备份/恢复演练并自动清理，不替代生产备份系统 |
+| `pnpm worker:chaos-smoke -- --timeout-ms=300000 --entities=512` | 隔离 Compose 中实际 kill/restart worker，验证 stale lease 恢复与向量幂等；仅为 E2 演练 |
 | `pnpm deployment:preflight -- [--strict] [--require-semantic]` | 发布前配置检查；严格模式默认校验词法检索版，只有承诺语义增强版时才追加 `--require-semantic`；且不回显凭据 |
 | `pnpm acceptance [url]` | 真实模型全链路验收（创世 → 编译 → Lint → 问答 → 推演 → 导出 → MCP） |
 | `pnpm db:generate` · `pnpm db:deploy` · `pnpm db:migrate` · `pnpm db:reset` | Prisma 客户端 / 迁移部署 / 迁移开发 / 重置 |
