@@ -78,7 +78,7 @@ async function main() {
     if (
       observed?.status !== 'completed' ||
       observed.indexed !== 1 ||
-      (recoveryMode && observed.attempts < 2)
+      (recoveryMode && (observed.attempts < 2 || observed.recoveryAttempts < 1))
     ) {
       throw new Error(
         `worker did not satisfy the contract: status=${observed?.status ?? 'timeout'} attempts=${observed?.attempts ?? 0} indexed=${observed?.indexed ?? 0} error=${observed?.error ?? 'none'}`
@@ -100,6 +100,7 @@ async function main() {
           jobId: job.id,
           status: observed.status,
           attempts: observed.attempts,
+          recoveryAttempts: observed.recoveryAttempts,
           reclaimed: recoveryMode ? observed.attempts >= 2 : null,
           indexed: observed.indexed,
           vectors,

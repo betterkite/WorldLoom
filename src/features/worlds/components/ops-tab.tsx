@@ -33,6 +33,7 @@ type Ops = {
   semanticIndexJob: {
     status: 'queued' | 'running' | 'completed' | 'failed';
     attempts: number;
+    recoveryAttempts: number;
     indexed: number;
     error: string | null;
   } | null;
@@ -179,14 +180,23 @@ export function OpsTab({ worldId }: { worldId: string }) {
           </span>
         )}
         {data.semanticIndexJob && data.semanticIndexJob.status !== 'completed' && (
-          <span className={data.semanticIndexJob.status === 'failed' ? 'text-destructive' : ''}>
-            后台任务：
-            {data.semanticIndexJob.status === 'queued'
-              ? '排队中'
-              : data.semanticIndexJob.status === 'running'
-                ? '运行中'
-                : '失败'}
-          </span>
+          <>
+            <span className={data.semanticIndexJob.status === 'failed' ? 'text-destructive' : ''}>
+              后台任务：
+              {data.semanticIndexJob.status === 'queued'
+                ? '排队中'
+                : data.semanticIndexJob.status === 'running'
+                  ? '运行中'
+                  : '失败'}
+            </span>
+            <span className='text-muted-foreground'>
+              执行 {data.semanticIndexJob.attempts} 次 · 恢复{' '}
+              {data.semanticIndexJob.recoveryAttempts}/3
+            </span>
+            {data.semanticIndexJob.error && (
+              <span className='text-destructive'>{data.semanticIndexJob.error}</span>
+            )}
+          </>
         )}
       </div>
       <div className='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>

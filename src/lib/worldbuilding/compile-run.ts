@@ -5,6 +5,7 @@ import { newUid } from '@/lib/uid';
 import { GovernanceError, requireWorld } from '@/lib/governance/changes';
 import { chat as defaultChat } from '@/lib/llm/client';
 import { getProfileLimits, getProfilePricing } from '@/lib/llm/config';
+import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
 import {
   analyzeCompileChunkWithMeta,
   COMPILE_PROMPT_VERSION,
@@ -398,6 +399,7 @@ export function compileRunSummary(run: CompileRunWithChunks) {
     result: run.result,
     error: run.error,
     attempts: run.attempts,
+    recoveryAttempts: run.recoveryAttempts,
     startedAt: run.startedAt,
     lastHeartbeatAt: run.lastHeartbeatAt,
     finishedAt: run.finishedAt,
@@ -666,21 +668,49 @@ export async function recoverStaleCompileRun(worldId: string, runId: string, now
   if (run.status !== CompileRunStatus.running) return run;
 
   const staleBefore = new Date(now.getTime() - COMPILE_RUN_STALE_AFTER_MS);
-  await prisma.compileRun.updateMany({
-    where: {
-      id: runId,
-      worldId,
-      status: CompileRunStatus.running,
-      OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
-    },
-    data: {
-      status: CompileRunStatus.queued,
-      error: 'Worker heartbeat expired; queued for recovery',
-      startedAt: null,
-      finishedAt: null,
-      lastHeartbeatAt: null
-    }
-  });
+  const staleRunWhere = {
+    id: runId,
+    worldId,
+    status: CompileRunStatus.running,
+    OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
+  };
+
+  if (run.recoveryAttempts >= MAX_AUTOMATIC_WORKER_RECOVERIES) {
+    await prisma.$transaction(async (tx) => {
+      const exhausted = await tx.compileRun.updateMany({
+        where: staleRunWhere,
+        data: {
+          status: CompileRunStatus.failed,
+          error: 'Worker recovery limit reached after heartbeat expiration',
+          finishedAt: now
+        }
+      });
+      if (exhausted.count > 0) {
+        await tx.compileChunk.updateMany({
+          where: {
+            runId,
+            status: { in: [CompileChunkStatus.analyzing, CompileChunkStatus.generating] }
+          },
+          data: {
+            status: CompileChunkStatus.failed,
+            error: 'Worker recovery limit reached after heartbeat expiration'
+          }
+        });
+      }
+    });
+  } else {
+    await prisma.compileRun.updateMany({
+      where: staleRunWhere,
+      data: {
+        status: CompileRunStatus.queued,
+        recoveryAttempts: { increment: 1 },
+        error: 'Worker heartbeat expired; queued for recovery',
+        startedAt: null,
+        finishedAt: null,
+        lastHeartbeatAt: null
+      }
+    });
+  }
   return getCompileRun(worldId, runId);
 }
 
@@ -698,6 +728,7 @@ export async function resumeCompileRun(worldId: string, runId: string) {
       data: {
         status: CompileRunStatus.queued,
         error: null,
+        recoveryAttempts: 0,
         startedAt: null,
         finishedAt: null,
         lastHeartbeatAt: null

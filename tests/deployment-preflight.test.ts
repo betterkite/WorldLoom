@@ -56,6 +56,24 @@ describe('deployment preflight', () => {
     expect(output).not.toContain('balance');
   });
 
+  it('rejects malformed worker concurrency instead of parsing a numeric prefix', () => {
+    const result = spawnSync(process.execPath, [script, '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...cleanEnvironment,
+        NODE_ENV: 'production',
+        WORLDLOOM_WORKER_MAX_CONCURRENCY: '4junk'
+      },
+      encoding: 'utf8'
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      'WORLDLOOM_WORKER_MAX_CONCURRENCY must be an integer from 1 to 32 in strict deployment mode'
+    );
+    expect(result.stdout).not.toContain('in-process task cap is explicit');
+  });
+
   it('fails strict mode until provider and production deployment facts are supplied', () => {
     const result = spawnSync(process.execPath, [script, '--strict', '--require-semantic'], {
       cwd: process.cwd(),

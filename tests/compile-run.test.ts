@@ -15,6 +15,7 @@ import { createChapterCompileRun } from '@/lib/worldbuilding/manuscript';
 import { createManuscript } from '@/lib/worldbuilding/manuscript';
 import { listChangesDetailed, submitChange } from '@/lib/governance/changes';
 import { mergeWorld } from '@/lib/governance/merge';
+import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
 
 const ANALYSIS = JSON.stringify({
   world_facts: ['分块事实'],
@@ -319,6 +320,7 @@ describe('durable compiler runs (ISS-31)', () => {
 
     const recovered = await recoverStaleCompileRun(worldId, created.run.id, now);
     expect(recovered.status).toBe('queued');
+    expect(recovered.recoveryAttempts).toBe(1);
     expect(recovered.error).toContain('heartbeat expired');
     expect(recovered.chunks.map((chunk) => chunk.status)).toEqual(['completed', 'pending']);
 
@@ -327,6 +329,38 @@ describe('durable compiler runs (ISS-31)', () => {
     expect(completed.status).toBe('completed');
     expect(chat.calls()).toBe(2);
     expect(completed.lastHeartbeatAt).not.toBeNull();
+  });
+
+  it('fails a stale compile run after the automatic recovery budget is exhausted', async () => {
+    const created = await createCompileRun(worldId, {
+      kind: 'source',
+      sourceFilename: '恢复耗尽.md',
+      sourceContent: '庚',
+      context: context()
+    });
+    const now = new Date('2026-09-24T10:00:00.000Z');
+    await prisma.compileRun.update({
+      where: { id: created.run.id },
+      data: {
+        status: 'running',
+        recoveryAttempts: MAX_AUTOMATIC_WORKER_RECOVERIES,
+        lastHeartbeatAt: new Date(now.getTime() - COMPILE_RUN_STALE_AFTER_MS - 1_000)
+      }
+    });
+    await prisma.compileChunk.updateMany({
+      where: { runId: created.run.id },
+      data: { status: 'analyzing' }
+    });
+
+    const failed = await recoverStaleCompileRun(worldId, created.run.id, now);
+    expect(failed.status).toBe('failed');
+    expect(failed.error).toContain('recovery limit reached');
+    expect(failed.chunks[0]?.status).toBe('failed');
+
+    const resumed = await resumeCompileRun(worldId, created.run.id);
+    expect(resumed.status).toBe('queued');
+    expect(resumed.recoveryAttempts).toBe(0);
+    expect(resumed.attempts).toBe(failed.attempts);
   });
 
   it('does not reclaim a worker with a fresh heartbeat', async () => {

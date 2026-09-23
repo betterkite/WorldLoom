@@ -151,6 +151,7 @@ async function main() {
     if (
       recovered?.status !== 'completed' ||
       recovered.attempts <= attemptsBeforeKill ||
+      recovered.recoveryAttempts < 1 ||
       recovered.indexed !== entityCount ||
       vectors !== entityCount ||
       !runtimeChanged
@@ -173,6 +174,7 @@ async function main() {
           heartbeatBeforeKill,
           killedAt,
           attempts: `${attemptsBeforeKill}->${recovered.attempts}`,
+          recoveryAttempts: recovered.recoveryAttempts,
           indexed: recovered.indexed,
           vectors,
           workerRuntime: {

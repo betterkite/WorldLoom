@@ -4,6 +4,7 @@ import { tokenize, cosine } from './tokenizer';
 import { embed as defaultEmbed, EmbeddingError } from '@/lib/llm/embeddings';
 import { getEmbeddingsConfig, isSemanticEnabled } from '@/lib/llm/config';
 import { contentHash } from './tokenizer';
+import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
 
 /**
  * Hybrid retrieval:
@@ -519,33 +520,52 @@ function semanticJobErrorMessage(error: unknown) {
 }
 
 /** Enqueue one durable refresh for a specific immutable world version. */
-export async function enqueueSemanticIndex(worldId: string, version: number) {
+export async function enqueueSemanticIndex(
+  worldId: string,
+  version: number,
+  { manualRetry = false }: { manualRetry?: boolean } = {}
+) {
   if (!isSemanticEnabled()) return null;
   const world = await prisma.world.findUnique({ where: { id: worldId }, select: { id: true } });
   if (!world) throw new Error(`World not found: ${worldId}`);
 
-  const existing = await prisma.semanticIndexJob.findUnique({
-    where: { worldId_version: { worldId, version } }
-  });
-  if (existing && (existing.status === 'queued' || existing.status === 'completed')) {
-    return existing;
+  const uniqueKey = { worldId_version: { worldId, version } };
+  const existing = await prisma.semanticIndexJob.findUnique({ where: uniqueKey });
+  if (!existing) {
+    return prisma.semanticIndexJob.upsert({
+      where: uniqueKey,
+      create: { worldId, version, status: 'queued' },
+      update: {}
+    });
   }
-  if (existing && existing.status === 'running') {
-    const heartbeat = existing.lastHeartbeatAt?.getTime() ?? 0;
-    if (Date.now() - heartbeat < SEMANTIC_JOB_STALE_MS) return existing;
-  }
+  if (existing.status === 'queued') return existing;
+  if (!manualRetry) return existing;
 
-  return prisma.semanticIndexJob.upsert({
-    where: { worldId_version: { worldId, version } },
-    create: { worldId, version, status: 'queued' },
-    update: {
+  let retryWhere: Prisma.SemanticIndexJobWhereInput;
+  if (existing.status === 'running') {
+    const staleBefore = new Date(Date.now() - SEMANTIC_JOB_STALE_MS);
+    if (existing.lastHeartbeatAt && existing.lastHeartbeatAt >= staleBefore) return existing;
+    retryWhere = {
+      id: existing.id,
+      status: 'running',
+      OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
+    };
+  } else {
+    retryWhere = { id: existing.id, status: existing.status };
+  }
+  await prisma.semanticIndexJob.updateMany({
+    where: retryWhere,
+    data: {
       status: 'queued',
       error: null,
+      recoveryAttempts: 0,
+      indexed: 0,
       startedAt: null,
       lastHeartbeatAt: null,
       finishedAt: null
     }
   });
+  return prisma.semanticIndexJob.findUnique({ where: uniqueKey });
 }
 
 /**
@@ -557,21 +577,50 @@ export async function runSemanticIndexJob(jobId: string) {
   if (!job) return null;
   if (job.status === 'completed') return job;
   const now = new Date();
+  const staleBefore = new Date(now.getTime() - SEMANTIC_JOB_STALE_MS);
   const staleRunning =
-    job.status === 'running' &&
-    Date.now() - (job.lastHeartbeatAt?.getTime() ?? 0) >= SEMANTIC_JOB_STALE_MS;
+    job.status === 'running' && (job.lastHeartbeatAt === null || job.lastHeartbeatAt < staleBefore);
+
+  if (staleRunning && job.recoveryAttempts >= MAX_AUTOMATIC_WORKER_RECOVERIES) {
+    await prisma.semanticIndexJob.updateMany({
+      where: {
+        id: jobId,
+        status: 'running',
+        recoveryAttempts: { gte: MAX_AUTOMATIC_WORKER_RECOVERIES },
+        OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
+      },
+      data: {
+        status: 'failed',
+        error: 'worker_recovery_limit_reached',
+        finishedAt: now,
+        lastHeartbeatAt: now
+      }
+    });
+    return prisma.semanticIndexJob.findUnique({ where: { id: jobId } });
+  }
+
+  const claimableStatus = [
+    { status: 'queued' as const },
+    { status: 'failed' as const },
+    ...(staleRunning
+      ? [
+          {
+            status: 'running' as const,
+            OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
+          }
+        ]
+      : [])
+  ];
   const claim = await prisma.semanticIndexJob.updateMany({
     where: {
       id: jobId,
-      OR: [
-        { status: 'queued' },
-        { status: 'failed' },
-        ...(staleRunning ? [{ status: 'running' as const }] : [])
-      ]
+      recoveryAttempts: { lt: MAX_AUTOMATIC_WORKER_RECOVERIES },
+      OR: claimableStatus
     },
     data: {
       status: 'running',
       attempts: { increment: 1 },
+      ...(staleRunning ? { recoveryAttempts: { increment: 1 } } : {}),
       startedAt: now,
       lastHeartbeatAt: now,
       finishedAt: null,

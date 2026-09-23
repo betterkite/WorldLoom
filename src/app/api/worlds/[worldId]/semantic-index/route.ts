@@ -4,8 +4,6 @@ import {
   getSemanticIndexJob,
   getSemanticIndexStatus,
   indexWorldSemantic,
-  markSemanticIndexJobFailed,
-  markSemanticIndexJobCompleted,
   runSemanticIndexJob,
   SEMANTIC_JOB_STALE_MS
 } from '@/lib/retrieval/search';
@@ -40,21 +38,30 @@ export async function POST(_request: Request, { params }: Params) {
     const { worldId } = await params;
     const before = await getSemanticIndexStatus(worldId);
     // A manual refresh is also the explicit retry action for a failed job.
-    await enqueueSemanticIndex(worldId, before.version);
-    const result = await indexWorldSemantic(worldId);
-    if (!result.skipped) {
-      const semantic = await getSemanticIndexStatus(worldId);
-      await markSemanticIndexJobCompleted(worldId, semantic.version, result.indexed);
+    const job = await enqueueSemanticIndex(worldId, before.version, { manualRetry: true });
+    const execution = job ? await runSemanticIndexJob(job.id) : null;
+    if (execution?.status === 'failed') {
+      const upstreamStatus = execution.error?.match(/^embedding_upstream_error \((\d{3})\)$/)?.[1];
+      const error = upstreamStatus
+        ? new EmbeddingError('embedding_upstream_error', 'Semantic indexing failed', {
+            status: Number(upstreamStatus)
+          })
+        : new EmbeddingError('embedding_upstream_error', 'Semantic indexing failed');
+      return errorResponse(error);
     }
+    const result = execution
+      ? {
+          indexed: execution.indexed,
+          skipped: false
+        }
+      : await indexWorldSemantic(worldId);
     return NextResponse.json(
-      { ...result, embedding: embeddingConfigSummary() },
+      { ...result, ...(execution ? { job: execution } : {}), embedding: embeddingConfigSummary() },
       { status: result.skipped ? 200 : 202 }
     );
   } catch (error) {
     if (error instanceof EmbeddingError) {
-      const { worldId } = await params;
-      const version = (await getSemanticIndexStatus(worldId)).version;
-      await markSemanticIndexJobFailed(worldId, version, error);
+      return errorResponse(error);
     }
     return errorResponse(error);
   }

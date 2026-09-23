@@ -8,8 +8,11 @@ import {
   getSemanticIndexStatus,
   indexWorldSemantic,
   markSemanticIndexJobFailed,
+  runSemanticIndexJob,
+  SEMANTIC_JOB_STALE_MS,
   searchWorld
 } from '@/lib/retrieval/search';
+import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
 import { getEmbeddingsConfig } from '@/lib/llm/config';
 import { askWorld } from '@/lib/assistant/ask';
 import { EmbeddingError } from '@/lib/llm/embeddings';
@@ -261,6 +264,35 @@ describe('retrieval & assistant (Phase 4)', () => {
       if (previous === undefined) delete process.env[config.credentialEnv];
       else process.env[config.credentialEnv] = previous;
     }
+  });
+
+  it('fails a stale semantic job after the automatic recovery budget is exhausted', async () => {
+    const version = (await prisma.world.findUniqueOrThrow({ where: { id: fixture.worldId } }))
+      .masterVersion;
+    const job = await enqueueSemanticIndex(fixture.worldId, version);
+    const staleAt = new Date(Date.now() - SEMANTIC_JOB_STALE_MS - 1_000);
+    await prisma.semanticIndexJob.update({
+      where: { id: job!.id },
+      data: {
+        status: 'running',
+        recoveryAttempts: MAX_AUTOMATIC_WORKER_RECOVERIES,
+        lastHeartbeatAt: staleAt
+      }
+    });
+
+    const failed = await runSemanticIndexJob(job!.id);
+    expect(failed).toMatchObject({
+      status: 'failed',
+      recoveryAttempts: MAX_AUTOMATIC_WORKER_RECOVERIES,
+      error: 'worker_recovery_limit_reached'
+    });
+
+    const manualRetry = await enqueueSemanticIndex(fixture.worldId, version, { manualRetry: true });
+    expect(manualRetry).toMatchObject({
+      status: 'queued',
+      recoveryAttempts: 0,
+      attempts: failed?.attempts
+    });
   });
 
   it('cancels semantic indexing cleanly when its world is deleted mid-run', async () => {

@@ -36,10 +36,11 @@ describe('background worker concurrency contract', () => {
   });
 
   it('rejects invalid or unsafe concurrency values', () => {
-    expect(getWorkerMaxConcurrency({ WORLDLOOM_WORKER_MAX_CONCURRENCY: '0' })).toBe(4);
-    expect(getWorkerMaxConcurrency({ WORLDLOOM_WORKER_MAX_CONCURRENCY: '-1' })).toBe(4);
-    expect(getWorkerMaxConcurrency({ WORLDLOOM_WORKER_MAX_CONCURRENCY: '33' })).toBe(32);
-    expect(getWorkerMaxConcurrency({ WORLDLOOM_WORKER_MAX_CONCURRENCY: 'not-a-number' })).toBe(4);
+    for (const value of ['0', '-1', '33', '4junk', '2.5', '']) {
+      expect(() => getWorkerMaxConcurrency({ WORLDLOOM_WORKER_MAX_CONCURRENCY: value })).toThrow(
+        'WORLDLOOM_WORKER_MAX_CONCURRENCY must be an integer from 1 to 32'
+      );
+    }
   });
 
   it('does not start more detached jobs than the process cap across overlapping ticks', async () => {

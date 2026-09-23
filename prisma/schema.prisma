@@ -253,6 +253,7 @@ model CompileRun {
   result          Json?
   error           String?
   attempts        Int              @default(0)
+  recoveryAttempts Int             @default(0)
   startedAt       DateTime?
   lastHeartbeatAt DateTime?
   finishedAt      DateTime?
@@ -310,6 +311,7 @@ model SemanticIndexJob {
   version         Int
   status          SemanticIndexJobStatus @default(queued)
   attempts        Int                    @default(0)
+  recoveryAttempts Int                   @default(0)
   indexed         Int                    @default(0)
   error           String?
   startedAt       DateTime?
@@ -566,7 +568,7 @@ model SkillRevision {
   createdAt     DateTime @default(now())
   restoredFromRevisionId String?
 
-  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skill Skill          @relation(fields: [skillId], references: [id], onDelete: Cascade)
   restoredFrom SkillRevision? @relation("SkillRevisionRestore", fields: [restoredFromRevisionId], references: [id], onDelete: SetNull)
   restoredBy   SkillRevision[] @relation("SkillRevisionRestore")
 

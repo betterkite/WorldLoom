@@ -5,7 +5,7 @@
 | 编号 | 优先级 | 问题 | 验收条件 | 状态 | GitHub issue |
 | --- | --- | --- | --- | --- | --- |
 | ISS-30 | P1 | 部署安全证据仍依赖部署方 | 外部认证、限流压测、生产备份恢复、迁移回滚和目标规模压测均有记录 | 待完成 | [#1](https://github.com/betterkite/WorldLoom/issues/1) |
-| ISS-31 | P1 | 独立 worker 拓扑尚未做生产级验证 | lease、并发上限、重试预算、故障恢复和幂等写入通过演练 | 本地 E2 故障注入已具备；生产证据待完成 | [#2](https://github.com/betterkite/WorldLoom/issues/2) |
+| ISS-31 | P1 | 独立 worker 拓扑尚未做生产级验证 | lease、并发上限、重试预算、故障恢复和幂等写入通过演练 | 已加 3 次 stale recovery 上限并完成本地 kill/restart E2 演练；生产拓扑与容量证据待完成 | [#2](https://github.com/betterkite/WorldLoom/issues/2) |
 | ISS-32 | P1 | 正式 provider 的价格与预算值需要按部署合同填写 | 严格 preflight 通过，未知价格不被伪造 | 待完成 | [#3](https://github.com/betterkite/WorldLoom/issues/3) |
 | ISS-33 | P2 | 真实创作质量仍需持续观察 | 连续真实素材试用形成质量、耗时、成本和阻塞记录 | 暂缓 | [#4](https://github.com/betterkite/WorldLoom/issues/4) |
 | ISS-34 | P2 | 大规模检索需要按目标硬件复测 | 目标数据量下 P95、内存和索引刷新满足部署门槛 | 按需 | [#5](https://github.com/betterkite/WorldLoom/issues/5) |

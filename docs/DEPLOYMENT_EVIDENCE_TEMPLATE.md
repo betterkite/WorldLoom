@@ -93,7 +93,7 @@
 | 源码、构建、镜像、SBOM、provenance | 仅对记录的 commit、镜像 digest 和构建 run 有效 | digest、签名主体、源码 revision、生成时间四者一致 |
 | 漏洞扫描 | 必须针对本次部署 digest；扫描数据库时间不得晚于报告生成时间 | 记录 scanner、DB 版本/更新时间、策略和完整报告哈希 |
 | 备份与恢复 | 最近一次备份满足目标 RPO；恢复演练默认不超过 90 天，或按组织政策执行 | 记录恢复目标、RPO/RTO、完整性检查和临时数据清理 |
-| Worker/迁移/故障演练 | 最近一次拓扑、schema、运行时或重试策略变化后必须重测；否则默认不超过 90 天 | 记录故障注入时间线、任务最终状态、重复写入检查和复核人 |
+| Worker/迁移/故障演练 | 最近一次拓扑、schema、运行时或重试策略变化后必须重测；否则默认不超过 90 天 | 记录故障注入时间线、任务最终状态、恢复次数预算、重复写入检查和复核人 |
 | 目标规模压测 | 目标硬件、版本、数据集或容量模型变化后必须重测；否则默认不超过 90 天 | 记录生成器版本、数据摘要、随机种子、预热、持续时间和错误定义 |
 | 告警、事件响应与隐私 | 关键联系人、告警路由、数据处理方或保留策略变化后必须重测；否则默认不超过 90 天 | 至少一次触发/撤销/升级记录，且不暴露秘密或未脱敏内容 |
 
@@ -330,7 +330,7 @@ RPO/RTO。
 | 数据库连接池上限 | `待填写` |
 | provider 全局/租户限流 | `待填写` |
 | lease / heartbeat 超时 | `待填写` |
-| retry budget / backoff | `待填写` |
+| stale recovery budget / provider backoff | `待填写：WorldLoom 默认最多 3 次 stale recovery；provider 重试策略按实际 runner/provider 配置记录` |
 | 任务监控与告警 | `待填写` |
 
 ### 6.1 必做故障注入
@@ -399,7 +399,7 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 103/103 通过 | `E1` | `pnpm test` |
+| 单元/集成测试 | 106/106 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | 严格部署 preflight | 6 pass、15 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
 | 严格部署 preflight（显式运行时预算覆盖） | 7 pass、14 failure；provider token/estimated-cost limits 通过，生产网关、TLS、备份恢复、worker 拓扑、容量、供应链、可观测性和隐私等外部事实仍阻断发布 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
@@ -414,8 +414,8 @@ RPO/RTO。
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
 | Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | 独立 Worker runtime smoke | 独立 worker 领取 queued `SemanticIndexJob`，1 次尝试完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |
-| 独立 Worker stale recovery | 独立 worker 重新领取过期 heartbeat 的 `running` 任务，attempts 至少增加 1，完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:recovery-smoke` |
-| 独立 Worker kill/restart recovery | 实际 `SIGKILL` worker 后启动时间变化，lease 过期后 attempts `1→2`，64/64 索引完成且向量 `64` 条无重复；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm run worker:chaos-smoke -- --timeout-ms=180000 --entities=64`；2026-09-23 UTC 脱敏输出已留存 |
+| 独立 Worker stale recovery | 独立 worker 重新领取过期 heartbeat 的 `running` 任务，`attempts` 至少增加 1、`recoveryAttempts` 增加 1，完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:recovery-smoke` |
+| 独立 Worker kill/restart recovery | 实际 `SIGKILL` worker 后 startedAt 改变，lease 过期后 `attempts 1→2`、`recoveryAttempts=1`，64/64 索引完成且向量 64 条无重复；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm run worker:chaos-smoke -- --timeout-ms=180000 --entities=64`；2026-09-23 UTC 脱敏输出已留存 |
 | CI / 容器 / E2E | 以对应 commit 的 GitHub Actions 为准；漏洞门禁失败时必须登记失败报告和修复后的复跑 run，不得只保留成功截图 | `E1/E2` | `gh run view <run-id>` |
 
 ## 11. 证据索引

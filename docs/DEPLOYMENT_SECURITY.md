@@ -105,8 +105,9 @@ worker 领取任务，发送 `SIGKILL`，确认 Compose 重启、heartbeat lease
 - 单实例、受控主机：可以使用现有 runner；服务重启后由状态查询/任务入口恢复 queued 或 stale job。
 - 受控生产 worker：可用 `WORLDLOOM_WORKER=true pnpm start`（或 `pnpm start:worker`）启动 DB 轮询 worker；它只负责领取 queued/stale job，普通 Web 实例保持 `WORLDLOOM_WORKER=false`。至少要保证只有一个受控 worker 实例，并监测其心跳与失败率。
 - 每个 worker 进程的 CompileRun 与 SemanticIndexJob 总并发由 `WORLDLOOM_WORKER_MAX_CONCURRENCY` 限制（默认 4，允许 1–32）；这是进程内保护，不等价于多副本全局并发上限，生产仍需结合数据库 lease、provider 限流和压测结果配置。
+- stale heartbeat 自动恢复最多执行 3 次；达到上限后任务进入 `failed` 并保留固定、脱敏的原因码。人工恢复会开启新的恢复预算，累计执行次数仍保留在 `attempts` 中。该限制保护崩溃恢复路径，不会对外部 provider 错误执行隐式重试。
 - 商业多副本：在拆出独立 worker、使用数据库 lease/并发上限并完成压测前，Web 副本数与 worker 数都必须保持在已验证范围内；不能把当前 runner 当作未经验证的 HA worker。
-- 独立 worker 的最小契约是：只领取 queued/stale job、按 heartbeat lease 执行、幂等写入 chunk/vector、达到 retry budget 后进入 failed，并把错误与 correlation id 留在任务记录中。
+- 独立 worker 的最小契约是：只领取 queued/stale job、按 heartbeat lease 执行、幂等写入 chunk/vector、达到 3 次 stale recovery budget 后进入 failed，并把脱敏错误与 correlation id 留在任务记录中。
 
 ## 可观测性与上线前检查
 

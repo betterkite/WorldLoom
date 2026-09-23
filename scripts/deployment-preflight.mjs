@@ -229,8 +229,11 @@ if (workerValue === 'true' || workerValue === 'false') {
   warn('WORLDLOOM_WORKER is not explicit; set it to true or false for deployment');
 }
 
-const workerConcurrency = Number.parseInt(process.env.WORLDLOOM_WORKER_MAX_CONCURRENCY ?? '', 10);
-if (Number.isInteger(workerConcurrency) && workerConcurrency >= 1 && workerConcurrency <= 32) {
+const workerConcurrencyRaw = process.env.WORLDLOOM_WORKER_MAX_CONCURRENCY ?? '';
+const workerConcurrency = /^[0-9]+$/.test(workerConcurrencyRaw)
+  ? Number(workerConcurrencyRaw)
+  : Number.NaN;
+if (Number.isSafeInteger(workerConcurrency) && workerConcurrency >= 1 && workerConcurrency <= 32) {
   pass(`WORLDLOOM_WORKER_MAX_CONCURRENCY=${workerConcurrency}: in-process task cap is explicit`);
 } else if (strict) {
   fail('WORLDLOOM_WORKER_MAX_CONCURRENCY must be an integer from 1 to 32 in strict deployment mode');

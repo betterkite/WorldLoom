@@ -6,18 +6,22 @@ import {
   recoverStaleCompileRun
 } from '@/lib/worldbuilding/compile-run';
 import { runSemanticIndexJob, SEMANTIC_JOB_STALE_MS } from '@/lib/retrieval/search';
+import {
+  DEFAULT_WORKER_MAX_CONCURRENCY,
+  MAX_WORKER_CONCURRENCY,
+  parseWorkerMaxConcurrency
+} from '@/lib/worker/policy';
 
 export const WORKER_POLL_INTERVAL_MS = 5_000;
 const WORKER_BATCH_SIZE = 4;
-const DEFAULT_WORKER_MAX_CONCURRENCY = 4;
 
 export function getWorkerMaxConcurrency(
   env: Record<string, string | undefined> = process.env
 ): number {
-  const configured = Number.parseInt(env.WORLDLOOM_WORKER_MAX_CONCURRENCY ?? '', 10);
-  if (!Number.isInteger(configured) || configured < 1) return DEFAULT_WORKER_MAX_CONCURRENCY;
-  return Math.min(configured, 32);
+  return parseWorkerMaxConcurrency(env.WORLDLOOM_WORKER_MAX_CONCURRENCY);
 }
+
+export { DEFAULT_WORKER_MAX_CONCURRENCY, MAX_WORKER_CONCURRENCY };
 
 export const WORKER_MAX_CONCURRENCY = getWorkerMaxConcurrency();
 
