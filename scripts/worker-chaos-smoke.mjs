@@ -46,12 +46,12 @@ async function docker(argumentsList, { allowFailure = false } = {}) {
   }
 }
 
-async function workerRuntimeIdentity() {
+async function workerRuntimeIdentity(containerId) {
   const value = await docker([
     'inspect',
     '--format',
     '{{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}',
-    'worldloom-worker'
+    containerId
   ]);
   const [id, startedAt, restartCountText] = value.split('|');
   const restartCount = Number.parseInt(restartCountText, 10);
@@ -77,13 +77,16 @@ async function main() {
   let workerWasStarted = false;
   let killedAt = null;
   try {
-    const workerContainer = await docker(['compose', '--profile', 'full', 'ps', '-q', 'worker']);
-    if (!workerContainer) {
+    const workerContainers = (await docker(['compose', '--profile', 'full', 'ps', '-q', 'worker']))
+      .split(/\s+/)
+      .filter(Boolean);
+    if (workerContainers.length !== 1) {
       throw new Error(
-        'worldloom-worker is not present; start the isolated stack with `docker compose --profile full up -d --build` first'
+        `worker chaos smoke requires exactly one worker replica; found ${workerContainers.length}. Start an isolated stack with \`docker compose --profile full up -d --build --scale worker=1\` first`
       );
     }
-    const runtimeBefore = await workerRuntimeIdentity();
+    const workerContainer = workerContainers[0];
+    const runtimeBefore = await workerRuntimeIdentity(workerContainer);
 
     const world = await prisma.world.create({
       data: {
@@ -127,7 +130,7 @@ async function main() {
 
     const attemptsBeforeKill = claimed.attempts;
     const heartbeatBeforeKill = claimed.lastHeartbeatAt?.toISOString() ?? null;
-    await docker(['kill', '--signal=SIGKILL', 'worldloom-worker']);
+    await docker(['kill', '--signal=SIGKILL', workerContainer]);
     killedAt = new Date().toISOString();
     await docker(['compose', '--profile', 'full', 'up', '-d', 'worker']);
     workerWasStarted = true;
@@ -139,7 +142,13 @@ async function main() {
       (value) => value?.status === 'completed' || value?.status === 'failed',
       recoveryDeadline
     );
-    const runtimeAfter = await workerRuntimeIdentity();
+    const restartedContainers = (await docker(['compose', '--profile', 'full', 'ps', '-q', 'worker']))
+      .split(/\s+/)
+      .filter(Boolean);
+    if (restartedContainers.length !== 1) {
+      throw new Error(`expected one restarted worker replica, found ${restartedContainers.length}`);
+    }
+    const runtimeAfter = await workerRuntimeIdentity(restartedContainers[0]);
     const runtimeChanged =
       runtimeBefore.id !== runtimeAfter.id || runtimeBefore.startedAt !== runtimeAfter.startedAt;
     const vectorCount = await prisma.$queryRaw`

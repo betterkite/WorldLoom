@@ -51,7 +51,6 @@ services:
 
   worker:
     build: .
-    container_name: worldloom-worker
     profiles: ['full']
     depends_on:
       db:

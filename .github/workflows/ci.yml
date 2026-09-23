@@ -334,11 +334,20 @@ jobs:
             docker compose --profile full down -v --remove-orphans
           }
           trap cleanup EXIT
-          docker compose --profile full up -d --build
+          docker compose --profile full up -d --build --scale worker=2
           for attempt in $(seq 1 60); do
-            app_status="$(docker inspect --format '{{.State.Health.Status}}' worldloom-app 2>/dev/null || true)"
-            worker_status="$(docker inspect --format '{{.State.Health.Status}}' worldloom-worker 2>/dev/null || true)"
-            if [ "$app_status" = healthy ] && [ "$worker_status" = healthy ]; then
+            app_id="$(docker compose --profile full ps -q app)"
+            worker_ids="$(docker compose --profile full ps -q worker)"
+            app_status="$(docker inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)"
+            worker_count="$(printf '%s\n' "$worker_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+            unhealthy_workers=0
+            for worker_id in $worker_ids; do
+              worker_status="$(docker inspect --format '{{.State.Health.Status}}' "$worker_id" 2>/dev/null || true)"
+              if [ "$worker_status" != healthy ]; then
+                unhealthy_workers=$((unhealthy_workers + 1))
+              fi
+            done
+            if [ "$app_status" = healthy ] && [ "$worker_count" = 2 ] && [ "$unhealthy_workers" = 0 ]; then
               break
             fi
             if [ "$attempt" = 60 ]; then

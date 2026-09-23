@@ -456,7 +456,7 @@ RPO/RTO。
 | 生产运行时镜像安全扫描（本地复测） | distroless Node 24 Debian 13，Trivy `os,library` 严格扫描 `CRITICAL,HIGH` 为 0；仅证明该构建与扫描时点 | `E1/E2` | `docker build ...`；Trivy JSON 报告与 SHA-256 归档 |
 | CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
-| Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
+| Full Compose 多副本拓扑 | `db → migrate → app + worker × 2`；worker 无宿主端口、固定 `WORLDLOOM_WORKER=true`、Compose 自动命名；CI 检查两个副本健康，数据库 CAS 并发测试保证单个 CompileRun 不重复执行；不证明生产 HA 或全局并发预算 | `E2` | `docker compose --profile full up -d --build --scale worker=2`、`docker compose --profile full ps`、`pnpm test` 中 `allows only one concurrent executor to claim a durable run` |
 | 独立 Worker runtime smoke | 独立 worker 领取 queued `SemanticIndexJob`，1 次尝试完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |
 | 独立 Worker stale recovery | 独立 worker 重新领取过期 heartbeat 的 `running` 任务，`attempts` 至少增加 1、`recoveryAttempts` 增加 1，完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:recovery-smoke` |
 | 独立 Worker kill/restart recovery | 实际 `SIGKILL` worker 后 startedAt 改变，lease 过期后 `attempts 1→2`、`recoveryAttempts=1`，64/64 索引完成且向量 64 条无重复；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm run worker:chaos-smoke -- --timeout-ms=180000 --entities=64`；2026-09-23 UTC 脱敏输出已留存 |

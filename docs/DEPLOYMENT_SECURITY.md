@@ -90,7 +90,8 @@ pnpm deployment:preflight -- --strict
 
 `docker compose --profile full up -d --build` 会先运行一次性 `migrate` 服务，再启动 `app` 和不发布
 宿主端口的 `worker` 服务；worker 使用相同 standalone 镜像但固定 `WORLDLOOM_WORKER=true`，只运行
-DB 任务轮询。迁移服务失败时，Compose 不会满足 app/worker 的 `service_completed_successfully`
+DB 任务轮询。worker 不设置固定容器名，可用 `docker compose --profile full up -d --scale worker=2`
+启动多个副本。迁移服务失败时，Compose 不会满足 app/worker 的 `service_completed_successfully`
 条件。容器内默认连接 Compose 的 `db:5432`，自定义连接串使用 `WORLDLOOM_CONTAINER_DATABASE_URL`，
 避免把宿主机 `.env` 中的 `DATABASE_URL`（通常指向 `localhost`）误传入容器。
 
@@ -114,10 +115,10 @@ worker 领取任务，发送 `SIGKILL`，确认 Compose 重启、heartbeat lease
 `CompileRun/CompileChunk` 与 `SemanticIndexJob` 都是数据库持久化任务，具有 checkpoint、心跳和陈旧任务回收。当前 Next 进程会在提交请求后触发本地 runner，因此：
 
 - 单实例、受控主机：可以使用现有 runner；服务重启后由状态查询/任务入口恢复 queued 或 stale job。
-- 受控生产 worker：可用 `WORLDLOOM_WORKER=true pnpm start`（或 `pnpm start:worker`）启动 DB 轮询 worker；它只负责领取 queued/stale job，普通 Web 实例保持 `WORLDLOOM_WORKER=false`。至少要保证只有一个受控 worker 实例，并监测其心跳与失败率。
-- 每个 worker 进程的 CompileRun 与 SemanticIndexJob 总并发由 `WORLDLOOM_WORKER_MAX_CONCURRENCY` 限制（默认 4，允许 1–32）；这是进程内保护，不等价于多副本全局并发上限，生产仍需结合数据库 lease、provider 限流和压测结果配置。
+- 受控生产 worker：可用 `WORLDLOOM_WORKER=true pnpm start`（或 `pnpm start:worker`）启动 DB 轮询 worker；它只负责领取 queued/stale job，普通 Web 实例保持 `WORLDLOOM_WORKER=false`。数据库 compare-and-set 领取允许多个 worker 副本竞争同一任务，但生产拓扑、故障切换与失败率仍须监测和验收。
+- 每个 worker 进程的 CompileRun 与 SemanticIndexJob 总并发由 `WORLDLOOM_WORKER_MAX_CONCURRENCY` 限制（默认 4，允许 1–32）；这是进程内保护，不是跨副本全局上限。副本数为 N 时，名义并发上限可达 N × 每进程上限；生产需结合 provider 账户限额、数据库连接池和压测结果设置副本及并发。
 - stale heartbeat 自动恢复最多执行 3 次；达到上限后任务进入 `failed` 并保留固定、脱敏的原因码。人工恢复会开启新的恢复预算，累计执行次数仍保留在 `attempts` 中。该限制保护崩溃恢复路径，不会对外部 provider 错误执行隐式重试。
-- 商业多副本：在拆出独立 worker、使用数据库 lease/并发上限并完成压测前，Web 副本数与 worker 数都必须保持在已验证范围内；不能把当前 runner 当作未经验证的 HA worker。
+- 商业多副本：worker 任务有数据库 CAS 与 heartbeat lease，可横向运行；Compose 双副本启动和竞争领取由 CI 验证，但这不构成生产 HA/SLO 证据。Web/worker 目标副本、全局并发和故障切换仍必须保持在实测范围内，直至完成目标规模压测与生产演练。
 - 独立 worker 的最小契约是：只领取 queued/stale job、按 heartbeat lease 执行、幂等写入 chunk/vector、达到 3 次 stale recovery budget 后进入 failed，并把脱敏错误与 correlation id 留在任务记录中。
 
 ## 可观测性与上线前检查

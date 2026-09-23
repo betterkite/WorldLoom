@@ -63,9 +63,9 @@ describe('production compose migration gate', () => {
     expect(workerBlock).toContain(mount);
   });
 
-  it('defines a separate full-profile worker without publishing a host port', () => {
+  it('defines a scalable full-profile worker without publishing a host port', () => {
     const workerBlock = compose.match(/\n  worker:\n([\s\S]*?)(?=\n  migrate:)/)?.[1] ?? '';
-    expect(workerBlock).toContain('container_name: worldloom-worker');
+    expect(workerBlock).not.toContain('container_name:');
     expect(workerBlock).toContain("WORLDLOOM_WORKER: 'true'");
     expect(workerBlock).toContain("profiles: ['full']");
     expect(workerBlock).not.toContain('ports:');

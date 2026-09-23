@@ -227,6 +227,49 @@ describe('durable compiler runs (ISS-31)', () => {
     expect(healthy.calls()).toBe(callsBeforeNoop);
   });
 
+  it('allows only one concurrent executor to claim a durable run', async () => {
+    const created = await createCompileRun(worldId, {
+      kind: 'source',
+      sourceFilename: '并发领取.md',
+      sourceContent: '唯一分块',
+      context: context()
+    });
+    let calls = 0;
+    let signalStarted!: () => void;
+    let releaseFirstCall!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    const runner: ChatFn = async () => {
+      calls += 1;
+      if (calls === 1) {
+        signalStarted();
+        await blocked;
+      }
+      return {
+        content: calls % 2 === 1 ? ANALYSIS : GENERATED,
+        profileId: 'fake',
+        model: 'fake',
+        usage: { inputTokens: calls, outputTokens: calls + 1 },
+        latencyMs: 1
+      };
+    };
+
+    const firstExecution = executeCompileRun(created.run.id, runner);
+    await started;
+    const competingExecution = await executeCompileRun(created.run.id, runner);
+    expect(competingExecution.status).toBe('running');
+    expect(calls).toBe(1);
+
+    releaseFirstCall();
+    const completed = await firstExecution;
+    expect(completed.status).toBe('completed');
+    expect(calls).toBe(2);
+  });
+
   it('cancelled runs do not call the model or stage changes', async () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
