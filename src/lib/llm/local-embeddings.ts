@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { env, LogLevel, pipeline } from '@huggingface/transformers';
 import { getLocalEmbeddingsConfig, isLocalEmbeddingAvailable } from './config';
 
 export class LocalEmbeddingError extends Error {
@@ -23,7 +24,6 @@ async function loadExtractor(): Promise<FeatureExtractor> {
   const config = getLocalEmbeddingsConfig();
   if (!config?.enabled) throw new LocalEmbeddingError();
 
-  const { env, LogLevel, pipeline } = await import('@huggingface/transformers');
   env.logLevel = LogLevel.ERROR;
   const cacheDir = resolve(/* turbopackIgnore: true */ process.cwd(), config.cacheDir);
   const modelPath = resolve(/* turbopackIgnore: true */ cacheDir, config.model);

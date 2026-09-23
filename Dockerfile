@@ -37,6 +37,15 @@ FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4310 HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
+# Next traces the statically imported transformer package, but its ONNX/native
+# dependency closure is externalized. Copy only the lockfile-selected runtime
+# packages required by that closure instead of the entire production tree.
+# Versions mirror pnpm-lock.yaml; update these paths together with dependency
+# upgrades.
+COPY --from=deps /app/node_modules/.pnpm/onnxruntime-node@1.30.0/node_modules/onnxruntime-node ./node_modules/onnxruntime-node
+COPY --from=deps /app/node_modules/.pnpm/onnxruntime-common@1.30.0/node_modules/onnxruntime-common ./node_modules/onnxruntime-common
+COPY --from=deps /app/node_modules/.pnpm/@huggingface+jinja@0.5.10/node_modules/@huggingface/jinja ./node_modules/@huggingface/jinja
+COPY --from=deps /app/node_modules/.pnpm/@huggingface+tokenizers@0.2.0/node_modules/@huggingface/tokenizers ./node_modules/@huggingface/tokenizers
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma

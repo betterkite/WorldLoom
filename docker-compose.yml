@@ -40,6 +40,11 @@ services:
       WORLDLOOM_WORKER: ${WORLDLOOM_WORKER:-false}
       WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}
       WORLDLOOM_TLS_TERMINATED: ${WORLDLOOM_TLS_TERMINATED:-false}
+    volumes:
+      # The model is downloaded by `pnpm embeddings:download` and intentionally
+      # stays outside Git and the production image. Mount it read-only at the
+      # path used by the local embedding fallback.
+      - ./.cache/worldloom-embeddings:/app/.cache/worldloom-embeddings:ro
     ports:
       - '127.0.0.1:4310:4310'
     restart: unless-stopped
@@ -62,6 +67,8 @@ services:
       WORLDLOOM_WORKER: 'true'
       WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}
       WORLDLOOM_TLS_TERMINATED: ${WORLDLOOM_TLS_TERMINATED:-false}
+    volumes:
+      - ./.cache/worldloom-embeddings:/app/.cache/worldloom-embeddings:ro
     # The worker uses the same standalone image but is not reachable through a
     # published host port. Next instrumentation starts only the DB-backed poller.
     restart: unless-stopped
