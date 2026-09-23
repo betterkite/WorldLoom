@@ -1,4 +1,3 @@
-// TS port of legacy src/core/zip.js (store-only ZIP writer, zero deps).
 /**
  * Minimal zero-dependency ZIP writer (store method, no compression).
  * Used by the wiki export (Q8) to ship an Obsidian-compatible vault snapshot

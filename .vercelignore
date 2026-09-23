@@ -1,2 +1,1 @@
-# Exclude cleanup/reference files from Vercel build
-__CLEANUP__
+# Vercel deployment excludes\n+node_modules\n+.next\n+.git\n+.pnpm-store\n+.cache\n+docs\n+*.md\n+!README.md\n+tmp\n+

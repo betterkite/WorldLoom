@@ -5,10 +5,9 @@ import { getEmbeddingsConfig, isSemanticEnabled } from '@/lib/llm/config';
 import { contentHash } from './tokenizer';
 
 /**
- * Hybrid retrieval (Phase 4, ADR-012/013 TS edition):
+ * Hybrid retrieval:
  *   lexical: CJK-bigram BM25 over entity/event text (in-process scoring —
- *            identical semantics to the legacy engine; index upgrade deferred
- *            until scale demands it)
+ *            index upgrade deferred until scale demands it)
  *   dense:   pgvector cosine over semantic_vectors (optional; needs an
  *            embeddings endpoint — otherwise pure lexical, honestly degraded)
  *   fusion:  Reciprocal Rank Fusion (k=60) → graph-degree pseudo-rerank

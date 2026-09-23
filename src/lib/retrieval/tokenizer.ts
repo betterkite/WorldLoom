@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 
 /**
- * CJK bigram tokenizer (TS port of legacy src/core/utils.js tokenize).
+ * CJK bigram tokenizer used by WorldLoom lexical retrieval.
  * Latin words kept whole (≥2 chars); CJK runs become overlapping bigrams —
- * the proven offline Chinese matching scheme from the legacy engine.
+ * a deterministic offline matching scheme.
  */
 export function tokenize(text: string): string[] {
   const normalized = String(text ?? '').toLowerCase();

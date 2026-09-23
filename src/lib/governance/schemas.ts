@@ -2,8 +2,7 @@ import { z } from 'zod';
 
 /**
  * Payload contracts for every Change kind. The same schemas validate API
- * input and merge-time payloads — Node (the service layer) is the staging
- * authority, mirroring the legacy compiler contract.
+ * input and merge-time payloads — the service layer is the staging authority.
  */
 
 export const entityKindSchema = z.enum([

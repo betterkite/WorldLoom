@@ -6,7 +6,7 @@ import { louvain } from '@/lib/graph/louvain';
 /**
  * World graph assembly (Phase 4): entity nodes + typed relation edges +
  * computed 5-signal related edges + Louvain communities + usage-free basics.
- * Related edges are computed on demand (legacy ensureRelatedEdges semantics);
+ * Related edges are computed on demand;
  * persistence deferred until scale requires it.
  */
 

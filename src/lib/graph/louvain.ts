@@ -1,5 +1,5 @@
 /**
- * Louvain community detection (TS port of legacy src/core/louvain.js).
+ * Louvain community detection for the WorldLoom graph.
  * Modularity optimisation over the undirected weighted graph, zero deps.
  * Our graphs are small (≤ a few hundred nodes) so plain local-moving passes
  * are sufficient — no multi-level refinement needed.
