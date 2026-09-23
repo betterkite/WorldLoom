@@ -135,10 +135,32 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Start production server
+        run: |
+          setsid pnpm start > e2e-server.log 2>&1 < /dev/null &
+          echo $! > e2e-server.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:4310/api/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat e2e-server.log
+          exit 1
+
       - name: E2E (real browser journeys)
+        env:
+          E2E_BASE_URL: http://localhost:4310
         run: |
           pnpm e2e e2e/manuscript-and-evals.spec.ts
           pnpm e2e e2e/world-journey.spec.ts
+
+      - name: Stop production server
+        if: always()
+        run: |
+          if [ -f e2e-server.pid ]; then
+            kill -- -"$(cat e2e-server.pid)" 2>/dev/null || true
+          fi
 
       - name: Upload Playwright report
         if: failure()
