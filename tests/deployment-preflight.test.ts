@@ -30,7 +30,8 @@ describe('deployment preflight', () => {
 
     expect(output).toContain('WorldLoom deployment preflight (local)');
     expect(output).toContain('Deployment preflight passed for the selected mode.');
-    expect(output).toContain('provider pricing table is not configured');
+    expect(output).toContain('provider pricing table is configured');
+    expect(output).toContain('token and estimated-cost limits are not fully configured');
     expect(output).toContain('gateway authentication: deployment fact is not confirmed');
     expect(output).not.toContain('DEEPSEEK_API_KEY=');
   });
@@ -43,7 +44,8 @@ describe('deployment preflight', () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('provider pricing table is missing or invalid');
+    expect(result.stdout).toContain('provider pricing table is configured');
+    expect(result.stdout).toContain('token and estimated-cost limits are missing or invalid');
     expect(result.stdout).toMatch(
       /credential is missing \(EMBEDDINGS_API_KEY\)|local embeddings\/Xenova\/bge-m3: model cache is (present|missing)/
     );

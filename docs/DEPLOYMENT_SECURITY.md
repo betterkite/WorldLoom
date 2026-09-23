@@ -35,9 +35,11 @@
 本地可复现的安全演练命令为 `pnpm db:backup:drill`：它在 `worldloom-db` 内创建带固定前缀的临时数据库，执行 custom-format `pg_dump`/`pg_restore`，比较 public table 与 `worlds` 行数后删除临时数据库和 dump；不会覆盖 `worldloom` 或 `worldloom_test`。该命令只能证明本地容器链路，生产仍需使用部署方备份系统完成跨卷/跨主机恢复和迁移回滚演练。
 
 模型 profile 的 `pricing`、`limits.maxInputTokensPerRun`、`limits.maxOutputTokensPerRun` 和
-`limits.maxEstimatedCostUsdPerRun` 必须由部署方依据当前 provider 合同填写。仓库默认保持
-`null`：系统不会猜测价格，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在继续
-写入下一个候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
+`limits.maxEstimatedCostUsdPerRun` 必须由部署方依据当前 provider 合同填写。当前
+`deepseek-official` 使用官方 `deepseek-flash` 的峰值、未命中缓存单价作为保守估算；DeepSeek
+价格会变化，部署前必须重新核对并按实际账户额度填写 limits。没有明确额度时，系统不会猜测
+每次运行上限，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在继续写入下一个
+候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
 
 发布前可运行 `pnpm deployment:preflight` 做结构检查；它只输出变量名和配置状态，不输出任何凭据。
 词法检索版正式发布必须在部署环境中运行严格门禁：

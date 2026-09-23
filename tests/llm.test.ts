@@ -17,7 +17,7 @@ describe('llm config (locked profiles)', () => {
     expect(getDefaultProfileId()).toBe('deepseek-official');
     expect(listProfileIds()).toContain('modelport');
     const profile = getProfile('deepseek-official');
-    expect(profile.model).toBe('deepseek-chat');
+    expect(profile.model).toBe('deepseek-flash');
     expect(profile.baseUrl).toBe('https://api.deepseek.com');
     expect(profile.credentialEnv).toBe('DEEPSEEK_API_KEY');
   });

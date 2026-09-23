@@ -4,12 +4,15 @@
   "profiles": {
     "deepseek-official": {
       "provider": "openai-compatible",
-      "model": "deepseek-chat",
+      "model": "deepseek-flash",
       "baseUrl": "https://api.deepseek.com",
       "credentialEnv": "DEEPSEEK_API_KEY",
       "timeoutMs": 60000,
       "maxRetries": 1,
-      "pricing": null,
+      "pricing": {
+        "inputUsdPerMillion": 0.3,
+        "outputUsdPerMillion": 1.2
+      },
       "limits": null
     },
     "modelport": {
