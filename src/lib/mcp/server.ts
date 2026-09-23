@@ -7,6 +7,7 @@ import { createCompileRun, executeCompileRun } from '@/lib/worldbuilding/compile
 import { LlmError, chat } from '@/lib/llm/client';
 import { EmbeddingError } from '@/lib/llm/embeddings';
 import type { ChatFn } from '@/lib/worldbuilding/genesis';
+import { WORLDLOOM_VERSION } from '@/lib/version';
 
 /**
  * MCP server (A6-2): minimal JSON-RPC 2.0 over HTTP POST /api/mcp.
@@ -172,7 +173,7 @@ export async function handleMcpRequest(request: JsonRpcRequest, runner: ChatFn =
       return result(request.id, {
         protocolVersion: '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'worldloom', version: '0.1.0' }
+        serverInfo: { name: 'worldloom', version: WORLDLOOM_VERSION }
       });
     }
     if (request.method === 'tools/list') {

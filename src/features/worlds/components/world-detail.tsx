@@ -555,7 +555,7 @@ export function VersionsTab({ worldId }: { worldId: string }) {
 }
 
 // ------------------------------------------------------------
-// Minimal generic dialog form (Phase 1; TanStack Form polish comes later)
+// Generic dialog form for the smaller world-management actions.
 // ------------------------------------------------------------
 
 type FieldSpec = { label: string; textarea?: boolean; placeholder?: string };

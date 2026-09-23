@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { detect } from '@/lib/llm/client';
 import { listProfileIds, getDefaultProfileId } from '@/lib/llm/config';
 import { embeddingConfigSummary } from '@/lib/llm/embeddings';
+import { WORLDLOOM_VERSION } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     service: 'worldloom',
-    version: '0.1.0-phase0',
+    version: WORLDLOOM_VERSION,
     llm: {
       defaultProfile: getDefaultProfileId(),
       profiles: detections,

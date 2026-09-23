@@ -48,7 +48,7 @@ export function CreateWorldDialog({
         <DialogHeader>
           <DialogTitle>新建世界</DialogTitle>
           <DialogDescription>
-            先立一个名字和一句话前提；创世向导将在 Phase 2 接手扩展。
+            先立一个名字和一句话前提；随后可以用创世向导继续扩展。
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-4'>
