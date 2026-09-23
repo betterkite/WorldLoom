@@ -125,11 +125,11 @@ function checkProfileBudget(profileId, profile) {
   }
 
   if (limitsValid && limits.maxEstimatedCostUsdPerRun !== null) {
-    pass(`${profileId}: CompileRun token and estimated-cost limits are configured`);
+    pass(`${profileId}: LLM operation token and estimated-cost limits are configured`);
   } else if (strict) {
-    fail(`${profileId}: CompileRun token and estimated-cost limits are missing or invalid`);
+    fail(`${profileId}: LLM operation token and estimated-cost limits are missing or invalid`);
   } else {
-    warn(`${profileId}: CompileRun token and estimated-cost limits are not fully configured`);
+    warn(`${profileId}: LLM operation token and estimated-cost limits are not fully configured`);
   }
 }
 

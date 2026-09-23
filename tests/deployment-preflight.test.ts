@@ -53,7 +53,7 @@ describe('deployment preflight', () => {
       encoding: 'utf8'
     });
 
-    expect(output).toContain('CompileRun token and estimated-cost limits are configured');
+    expect(output).toContain('LLM operation token and estimated-cost limits are configured');
     expect(output).not.toContain('balance');
   });
 
@@ -85,7 +85,7 @@ describe('deployment preflight', () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('provider pricing table is configured');
     expect(result.stdout).toContain(
-      'CompileRun token and estimated-cost limits are missing or invalid'
+      'LLM operation token and estimated-cost limits are missing or invalid'
     );
     expect(result.stdout).toMatch(
       /credential is missing \(EMBEDDINGS_API_KEY\)|local embeddings\/Xenova\/bge-m3: model cache is (present|missing)/

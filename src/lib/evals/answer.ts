@@ -3,6 +3,7 @@ import { requireWorld } from '@/lib/governance/changes';
 import { askWorld } from '@/lib/assistant/ask';
 import { chat as defaultChat } from '@/lib/llm/client';
 import type { ChatResult } from '@/lib/llm/client';
+import { LlmUsageBudgetError, withLlmUsageBudget } from '@/lib/llm/usage-budget';
 
 /**
  * P7-2 收尾：LLM 答案评测。
@@ -80,12 +81,12 @@ export async function runAnswerEval(
   options: { chatFn?: ChatFn } = {}
 ) {
   const world = await requireWorld(worldId);
-  const chat = options.chatFn ?? defaultChat;
+  const chat = withLlmUsageBudget(options.chatFn ?? defaultChat, 'answer evaluation');
   const results: AnswerEvalRow[] = [];
 
   for (const c of cases) {
     try {
-      const answer = await askWorld(worldId, { question: c.query, chatFn: options.chatFn });
+      const answer = await askWorld(worldId, { question: c.query, chatFn: chat });
       const judge = await judgeOnce(chat, c.query, answer.answer, c.rubric ?? '');
       results.push({
         caseId: globalThis.crypto.randomUUID(),
@@ -96,6 +97,7 @@ export async function runAnswerEval(
         reason: judge.reason
       });
     } catch (error) {
+      if (error instanceof LlmUsageBudgetError) throw error;
       results.push({
         caseId: globalThis.crypto.randomUUID(),
         query: c.query,

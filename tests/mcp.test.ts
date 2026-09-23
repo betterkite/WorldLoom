@@ -4,6 +4,7 @@ import { createWorld } from '@/lib/worldbuilding/worlds';
 import type { ChatFn } from '@/lib/worldbuilding/genesis';
 import { handleMcpRequest, mcpErrorMessage } from '@/lib/mcp/server';
 import { LlmError } from '@/lib/llm/client';
+import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 
 const ANALYSIS = JSON.stringify({
   world_facts: ['MCP 测试事实'],
@@ -117,6 +118,15 @@ describe('MCP durable compiler entrypoint', () => {
     const message = mcpErrorMessage(providerError);
     expect(message).toBe('模型服务暂不可用，请稍后重试');
     expect(message).not.toContain('provider account secret');
+    expect(
+      mcpErrorMessage(
+        new LlmUsageBudgetError(
+          'answer evaluation',
+          'deepseek-official',
+          'private accounting detail'
+        )
+      )
+    ).toBe('本次模型操作超出已配置预算');
     expect(mcpErrorMessage(new Error('database password'))).toBe('请求无法处理');
   });
 });

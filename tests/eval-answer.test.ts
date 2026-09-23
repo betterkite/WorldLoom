@@ -5,6 +5,7 @@ import { submitChange } from '@/lib/governance/changes';
 import { mergeWorld } from '@/lib/governance/merge';
 import { runAnswerEval } from '@/lib/evals/answer';
 import type { ChatResult } from '@/lib/llm/client';
+import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 
 async function cleanDb() {
   await prisma.$transaction([
@@ -98,6 +99,34 @@ describe('P7-2 answer eval (LLM judge)', () => {
     const run = await prisma.evalRun.findUniqueOrThrow({ where: { id: result.runId } });
     expect(run.mode).toBe('answer');
     expect(run.score).toBe(1);
+  });
+
+  it('shares one operation budget across every case and stops before the next model call', async () => {
+    const envName = 'WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN';
+    const previous = process.env[envName];
+    process.env[envName] = '3';
+    let calls = 0;
+    const chatFn = async (request: { maxTokens?: number }): Promise<ChatResult> => {
+      calls += 1;
+      return {
+        content: calls % 2 === 1 ? '向顶天的师父是云隐子 [1]。' : '{"score":1,"reason":"符合"}',
+        profileId: 'deepseek-official',
+        model: 'deepseek-flash',
+        usage: { inputTokens: 1, outputTokens: Math.min(2, request.maxTokens ?? 2) },
+        latencyMs: 1
+      };
+    };
+    try {
+      await expect(
+        runAnswerEval(worldId, [{ query: '向顶天的师父是谁' }, { query: '向顶天是谁' }], { chatFn })
+      ).rejects.toBeInstanceOf(LlmUsageBudgetError);
+
+      expect(calls).toBe(2);
+      expect(await prisma.evalRun.count({ where: { worldId, mode: 'answer' } })).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
   });
 
   it('keeps unparseable judge output as null score without fabricating', async () => {

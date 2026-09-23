@@ -13,6 +13,7 @@ import {
   buildGenesisCommitMessages,
   buildPlanMessages
 } from './prompts';
+import { withLlmUsageBudget } from '@/lib/llm/usage-budget';
 
 /** Chat injection seam: the real client in production, fakes in tests. */
 export type ChatFn = (request: {
@@ -95,7 +96,14 @@ export async function planWorld(
   input: { name: string; premise: string; style: string }
 ): Promise<GenesisPlan> {
   const messages = buildPlanMessages(input);
-  const result = await chat({ messages, temperature: 0.7, maxTokens: 8000 });
+  const result = await withLlmUsageBudget(
+    chat,
+    'genesis planning'
+  )({
+    messages,
+    temperature: 0.7,
+    maxTokens: 8000
+  });
   return parseLlmJson(result, genesisPlanSchema, 'genesis plan');
 }
 
@@ -112,7 +120,14 @@ export async function commitGenesis(
 }> {
   const { stageGeneratedWorld } = await import('./stager');
   const messages = buildGenesisCommitMessages(input, plan);
-  const result = await chat({ messages, temperature: 0.5, maxTokens: 8000 });
+  const result = await withLlmUsageBudget(
+    chat,
+    'genesis commit'
+  )({
+    messages,
+    temperature: 0.5,
+    maxTokens: 8000
+  });
   const generated = parseLlmJson(
     result,
     generatedWorldSchema,

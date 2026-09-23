@@ -3,6 +3,7 @@ import { searchWorld } from '@/lib/retrieval/search';
 import type { SemanticIndexStatus } from '@/lib/retrieval/search';
 import { chat as defaultChat } from '@/lib/llm/client';
 import type { ChatMessage, ChatResult } from '@/lib/llm/client';
+import { LlmUsageBudgetError, withLlmUsageBudget } from '@/lib/llm/usage-budget';
 
 /**
  * Creation assistant (Phase 4, ADR-014): evidence-constrained Q&A.
@@ -44,7 +45,7 @@ export async function askWorld(
     searchOptions?: { embedFn?: (texts: string[]) => Promise<number[][]> };
   }
 ): Promise<AskResult> {
-  const chat = input.chatFn ?? defaultChat;
+  const chat = withLlmUsageBudget(input.chatFn ?? defaultChat, 'world Q&A');
   const world = await prisma.world.findUnique({ where: { id: worldId } });
   if (!world) throw new Error(`World not found: ${worldId}`);
 
@@ -178,7 +179,8 @@ async function rewriteQuestion(
       .replace(/^["']|["']$/g, '')
       .slice(0, 200);
     return rewritten || null;
-  } catch {
+  } catch (error) {
+    if (error instanceof LlmUsageBudgetError) throw error;
     return null;
   }
 }

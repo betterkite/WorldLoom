@@ -6,6 +6,7 @@ import { createSource } from '@/lib/intake/sources';
 import { createCompileRun, executeCompileRun } from '@/lib/worldbuilding/compile-run';
 import { LlmError, chat } from '@/lib/llm/client';
 import { EmbeddingError } from '@/lib/llm/embeddings';
+import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 import type { ChatFn } from '@/lib/worldbuilding/genesis';
 import { WORLDLOOM_VERSION } from '@/lib/version';
 
@@ -33,6 +34,7 @@ function error(id: JsonRpcRequest['id'], code: number, message: string) {
 
 /** Never expose provider bodies, database errors, or stack details over MCP. */
 export function mcpErrorMessage(caught: unknown): string {
+  if (caught instanceof LlmUsageBudgetError) return '本次模型操作超出已配置预算';
   if (caught instanceof LlmError) return '模型服务暂不可用，请稍后重试';
   if (caught instanceof EmbeddingError) return '语义服务暂不可用，已保留词法检索';
   if (caught instanceof GovernanceError) return `请求无法处理（${caught.code}）`;

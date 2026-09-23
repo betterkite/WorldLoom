@@ -4,6 +4,7 @@ import { GovernanceError } from '@/lib/governance/changes';
 import { ZodError } from 'zod';
 import { EmbeddingError } from '@/lib/llm/embeddings';
 import { LlmError } from '@/lib/llm/client';
+import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 
 const STATUS_BY_CODE: Record<string, number> = {
   world_not_found: 404,
@@ -83,6 +84,18 @@ export function errorResponse(error: unknown): NextResponse {
       status,
       correlationId,
       status === 503
+    );
+  }
+  if (error instanceof LlmUsageBudgetError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: error.code,
+          message: '本次模型操作超出已配置预算，请缩减请求或联系管理员',
+          correlationId
+        }
+      },
+      { status: 429, headers: { 'x-correlation-id': correlationId } }
     );
   }
   console.error(`[api] unhandled error ${correlationId}`, error);

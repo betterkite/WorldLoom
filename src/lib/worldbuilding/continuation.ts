@@ -3,6 +3,7 @@ import { GovernanceError, requireWorld, submitChange } from '@/lib/governance/ch
 import { getRelationsAt } from './relations';
 import type { ChatFn } from './genesis';
 import { z } from 'zod';
+import { withLlmUsageBudget } from '@/lib/llm/usage-budget';
 
 /**
  * Continuation engine (Phase 5, ADR core-loop):
@@ -163,7 +164,10 @@ export async function generateContinuations(
     ? `【已启用技能约束】\n${skills.map((skill) => `- ${skill.name}: ${skill.instructions}`).join('\n')}`
     : '';
 
-  const result = await chat({
+  const result = await withLlmUsageBudget(
+    chat,
+    'continuation generation'
+  )({
     temperature: 0.8,
     maxTokens: 4000,
     messages: [
