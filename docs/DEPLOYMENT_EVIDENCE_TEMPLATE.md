@@ -283,7 +283,7 @@ RPO/RTO。
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
-| 检索基准 | 500 entities、2000 events，12 samples，P95 468.6ms，RSS 增量 15.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
+| 检索基准 | 500 entities、2000 events，12 samples，P95 192.5ms，RSS 增量 23.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
 | Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | CI / 容器 / E2E | 以对应 commit 的 GitHub Actions 为准 | `E1/E2` | `gh run view <run-id>` |

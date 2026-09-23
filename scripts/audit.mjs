@@ -14,6 +14,26 @@
 const BASE = process.argv[2] ?? 'http://localhost:4310';
 let failures = 0;
 const results = [];
+const FETCH_ATTEMPTS = 3;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url, init) {
+  let lastError;
+  for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      if (response.status < 500 || attempt === FETCH_ATTEMPTS) return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === FETCH_ATTEMPTS) throw error;
+    }
+    await sleep(attempt * 250);
+  }
+  throw lastError ?? new Error('request failed after retries');
+}
 
 async function call(method, path, body, headers, raw) {
   const h = { ...(headers ?? {}) };
@@ -25,7 +45,7 @@ async function call(method, path, body, headers, raw) {
       h['content-type'] = 'application/json';
     }
   }
-  const response = await fetch(`${BASE}${path}`, { method, headers: h, body: payload });
+  const response = await fetchWithRetry(`${BASE}${path}`, { method, headers: h, body: payload });
   const text = await response.text();
   return { status: response.status, body: raw ? text : (() => { try { return JSON.parse(text); } catch { return {}; } })() };
 }
@@ -114,7 +134,7 @@ async function main() {
     ['page.skills', '/dashboard/skills'], ['page.evals', '/dashboard/evals']
   ];
   for (const [name, p] of pages) {
-    const r = await fetch(`${BASE}${p}`);
+    const r = await fetchWithRetry(`${BASE}${p}`);
     const text = await r.text();
     step(name, r.status === 200 && text.length > 1000, `${r.status} ${text.length}B`);
   }
@@ -125,7 +145,7 @@ async function main() {
     ['page.w.review', '/review'], ['page.w.lint', '/lint'], ['page.w.manuscript', '/manuscript'],
     ['page.w.sources', '/sources'], ['page.w.ops', '/ops'], ['page.w.versions', '/versions']
   ]) {
-    const r = await fetch(`${BASE}/dashboard/worlds/${worldId}${p}`);
+    const r = await fetchWithRetry(`${BASE}/dashboard/worlds/${worldId}${p}`);
     const text = await r.text();
     step(name, r.status === 200 && text.length > 1000, `${r.status} ${text.length}B`);
   }
