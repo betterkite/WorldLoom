@@ -108,13 +108,14 @@ async function auditPage(page, name, path, options = {}) {
       } catch { return { w: c.width, h: c.height, variance: -2, painted: 0, engine: 'error' }; }
     });
     const svgPaths = document.querySelectorAll('svg path, svg line, svg polyline').length;
+    const graphFallback = Boolean(document.querySelector('[data-graph-fallback="true"]'));
     // 画布不得逃逸出容器（Reagraph 画布是 absolute; inset:0，容器必须定位）
     const canvasOverflow = [...document.querySelectorAll('canvas')].some((c) => {
       const parent = c.parentElement?.getBoundingClientRect();
       const self = c.getBoundingClientRect();
       return Boolean(parent && parent.height > 50 && self.height > parent.height + 8);
     });
-    return { docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, canvasOverflow };
+    return { docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, graphFallback, canvasOverflow };
   });
 
   if (geometry.docOverflow > 2) record(name, 'FAIL', '几何', `页面横向溢出 ${geometry.docOverflow}px`);
@@ -127,10 +128,11 @@ async function auditPage(page, name, path, options = {}) {
   if (geometry.templateHits.length) record(name, 'FAIL', '文案', `模板英文残留：${geometry.templateHits.join(', ')}`);
   if (geometry.canvasOverflow) record(name, 'FAIL', '几何', '画布高度溢出容器（绝对定位逃逸）');
   if (options.expectCanvas) {
-    // G6 分层画布：只要有一层真的画了东西即通过
+    // WebGL 画布优先；无 WebGL 时，产品提供可交互的 SVG 兼容渲染。
     const drawn = geometry.canvasInfo.filter((c) => c.variance > 8 && c.painted > 0);
     const engines = [...new Set(geometry.canvasInfo.map((c) => c.engine))].join('/');
-    record(name, drawn.length ? 'OK' : 'FAIL', '视觉证据', `canvas ${geometry.canvasInfo.length} 层（${engines}），实际绘制 ${drawn.length} 层`);
+    const detail = `canvas ${geometry.canvasInfo.length} 层（${engines}），实际绘制 ${drawn.length} 层${geometry.graphFallback ? '；SVG 兼容渲染已启用' : ''}`;
+    record(name, drawn.length || geometry.graphFallback ? 'OK' : 'FAIL', '视觉证据', detail);
   }
   if (options.expectSvg) {
     record(name, geometry.svgPaths > 0 ? 'OK' : 'FAIL', '视觉证据', `SVG 图元 ${geometry.svgPaths} 个`);

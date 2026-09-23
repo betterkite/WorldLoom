@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { GraphCanvas, type GraphEdge, type GraphNode, type LayoutTypes } from 'reagraph';
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { graphQueryOptions } from '../api/queries';
@@ -129,6 +129,8 @@ type ViewEdge = {
   locationName?: string | null;
 };
 
+type FallbackPoint = { x: number; y: number };
+
 export function GraphTab({ worldId }: { worldId: string }) {
   const [view, setView] = useState<GraphView>('relations');
   const [asOfUid, setAsOfUid] = useState('');
@@ -137,6 +139,9 @@ export function GraphTab({ worldId }: { worldId: string }) {
   const [layoutType, setLayoutType] = useState<LayoutTypes>('forceDirected2d');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [egoUid, setEgoUid] = useState<string | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [webglPaintedKey, setWebglPaintedKey] = useState<string | null>(null);
+  const graphViewportRef = useRef<HTMLDivElement>(null);
 
   const focus = useQuery({
     queryKey: ['focus-graph', worldId, view, asOfUid],
@@ -303,6 +308,80 @@ export function GraphTab({ worldId }: { worldId: string }) {
     };
   }, [effectiveView, focus.data, overviewView, showRelated, showIsolated, egoUid]);
 
+  // Reagraph creates its R3F camera controls in a separate commit. Mounting the
+  // canvas on the same commit as async graph data can leave its internal
+  // `isCentered` gate permanently closed in a production build. Give the
+  // controls one client frame to mount, and remount when the graph shape or
+  // layout changes so the first paint is deterministic.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setCanvasReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, [effectiveView, layoutType, model.graphNodes.length, model.graphEdges.length]);
+
+  const graphRenderKey = `${effectiveView}:${layoutType}:${model.graphNodes.map((node) => node.id).join(',')}`;
+
+  const fallbackGraph = useMemo(() => {
+    const center = { x: 500, y: 280 };
+    const count = model.graphNodes.length;
+    const radius = count <= 1 ? 0 : Math.min(220, Math.max(130, count * 42));
+    const points = new Map<string, FallbackPoint>();
+    model.graphNodes.forEach((node, index) => {
+      const angle = count <= 1 ? 0 : (index / count) * Math.PI * 2 - Math.PI / 2;
+      points.set(node.id, {
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius
+      });
+    });
+    return {
+      points,
+      edges: model.graphEdges.flatMap((edge) => {
+        const source = points.get(edge.source);
+        const target = points.get(edge.target);
+        return source && target ? [{ edge, source, target }] : [];
+      })
+    };
+  }, [model.graphEdges, model.graphNodes]);
+
+  useEffect(() => {
+    if (!canvasReady) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempts = 0;
+    const checkCanvas = () => {
+      if (cancelled) return;
+      const canvas = graphViewportRef.current?.querySelector('canvas');
+      const gl = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl');
+      if (canvas && gl && canvas.width > 1 && canvas.height > 1) {
+        const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        let painted = false;
+        for (let index = 0; index < pixels.length; index += 4 * 37) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          const alpha = pixels[index + 3];
+          if (
+            alpha > 20 &&
+            (Math.abs(red - green) > 12 || Math.abs(green - blue) > 12 || red + green + blue < 690)
+          ) {
+            painted = true;
+            break;
+          }
+        }
+        if (painted) {
+          setWebglPaintedKey(graphRenderKey);
+          return;
+        }
+      }
+      if (attempts++ < 8) timer = window.setTimeout(checkCanvas, 250);
+    };
+    checkCanvas();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [canvasReady, graphRenderKey]);
+
   const selectedNode = model.nodes.find((node) => node.id === selectedUid) ?? null;
   const selectedEdges = model.edges.filter(
     (edge) => edge.source === selectedUid || edge.target === selectedUid
@@ -442,10 +521,18 @@ export function GraphTab({ worldId }: { worldId: string }) {
                 ? '还没有人物关系事件。可用「故事创作」推演采纳或手工提交关系变更。'
                 : '先在世界里创建条目，图谱才会生长。'}
           </p>
+        ) : !canvasReady ? (
+          <div className='flex h-[560px] items-center justify-center rounded-lg border bg-muted/20 text-sm text-muted-foreground'>
+            正在布局图谱…
+          </div>
         ) : (
           // Reagraph 的画布 CSS 为 position:absolute; inset:0 —— 容器必须是定位元素，
           // 否则画布会逃逸到更大的定位祖先、撑破布局并压住下方内容。
-          <div className='relative h-[560px] w-full overflow-hidden rounded-lg border bg-muted/20'>
+          <div
+            ref={graphViewportRef}
+            data-graph-viewport='true'
+            className='relative h-[560px] w-full overflow-hidden rounded-lg border bg-muted/20'
+          >
             <GraphCanvas
               // preserveDrawingBuffer 让验收脚本能读取像素，验证图确实铺满画布
               glOptions={{ preserveDrawingBuffer: true }}
@@ -456,6 +543,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
               edgeInterpolation='curved'
               edgeArrowPosition='end'
               draggable
+              key={graphRenderKey}
               animated={false}
               actives={selectedUid ? [selectedUid] : []}
               onNodeClick={(node) => {
@@ -463,6 +551,95 @@ export function GraphTab({ worldId }: { worldId: string }) {
                 setEgoUid(null);
               }}
             />
+            {webglPaintedKey !== graphRenderKey && (
+              <div
+                data-graph-fallback='true'
+                className='absolute inset-0 bg-background/95'
+                aria-label='图谱兼容渲染'
+              >
+                <svg
+                  className='h-full w-full'
+                  viewBox='0 0 1000 560'
+                  role='img'
+                  aria-label='世界关系图谱'
+                >
+                  <defs>
+                    <marker
+                      id='worldloom-graph-arrow'
+                      markerHeight='7'
+                      markerWidth='7'
+                      orient='auto-start-reverse'
+                      refX='6'
+                      refY='3.5'
+                      viewBox='0 0 7 7'
+                    >
+                      <path d='M0,0 L7,3.5 L0,7 z' fill='currentColor' />
+                    </marker>
+                  </defs>
+                  <g className='text-muted-foreground'>
+                    {fallbackGraph.edges.map(({ edge, source, target }) => (
+                      <line
+                        key={edge.id}
+                        x1={source.x}
+                        y1={source.y}
+                        x2={target.x}
+                        y2={target.y}
+                        stroke={edge.fill ?? '#6366f1'}
+                        strokeDasharray={edge.dashed ? '8 6' : undefined}
+                        strokeWidth='3'
+                        markerEnd='url(#worldloom-graph-arrow)'
+                        opacity='0.75'
+                      />
+                    ))}
+                  </g>
+                  {model.graphNodes.map((node) => {
+                    const point = fallbackGraph.points.get(node.id);
+                    if (!point) return null;
+                    const selected = node.id === selectedUid;
+                    return (
+                      <g
+                        key={node.id}
+                        role='button'
+                        tabIndex={0}
+                        aria-label={`查看${node.label}`}
+                        className='cursor-pointer outline-none'
+                        onClick={() => {
+                          setSelectedUid(node.id);
+                          setEgoUid(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedUid(node.id);
+                            setEgoUid(null);
+                          }
+                        }}
+                      >
+                        <circle
+                          cx={point.x}
+                          cy={point.y}
+                          r={selected ? 26 : 21}
+                          fill={node.fill ?? '#94a3b8'}
+                          stroke={selected ? '#111827' : '#ffffff'}
+                          strokeWidth={selected ? 5 : 3}
+                        />
+                        <text
+                          x={point.x}
+                          y={point.y + 42}
+                          textAnchor='middle'
+                          className='fill-foreground text-[18px] font-medium'
+                        >
+                          {node.label}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+                <span className='absolute bottom-3 left-3 rounded-md border bg-background/90 px-2 py-1 text-xs text-muted-foreground'>
+                  WebGL 不可用，已启用兼容渲染
+                </span>
+              </div>
+            )}
           </div>
         )}
 

@@ -14,7 +14,7 @@
 - **编年史与时间线**：纪元分段、虚构历法排序、因果边连线、关系时间切片回放（任意事件时刻的关系状态着色）
 - **世界知识助手**：词法（CJK bigram BM25）+ 语义（pgvector）+ RRF 融合的混合检索；回答逐条带引用，证据不足时如实声明，零证据会改写问题重试。检索语料包含条目、事件与关系快照
 - **故事创作台**：半成品批量导入与自动分章、章节编辑与定稿回编译、进度光标、推演候选（采纳/忽略）、伏笔埋设与回收
-- **图谱**（Reagraph WebGL）：关系图/因果图/总览三视图，节点按类型着色、节点详情侧边栏、ego 邻居、时间切片着色、多布局切换（力导向/环形/同心/层次/放射）、推断相关边可开关
+- **图谱**（Reagraph WebGL，自动兼容降级）：关系图/因果图/总览三视图，节点按类型着色、节点详情侧边栏、ego 邻居、时间切片着色、多布局切换（力导向/环形/同心/层次/放射）、推断相关边可开关；WebGL 不可用时保留可交互 SVG 图谱
 - **评测平台**：检索命中率基准 + LLM 答案评测（裁判按评分要点打分，无法解析的评审不编造分数），答案榜单按均分排序
 - **输出与集成**：Obsidian 镜像 ZIP（含 timeline.md）、游戏引擎 JSON、MCP Server（`query_world` / `compile_source` / `lint_world`）
 
@@ -41,7 +41,7 @@ pnpm dev                        # http://localhost:4310
 - `config/llm.json` 声明锁定的 profile（OpenAI 兼容端点、模型、超时、凭据环境变量名），默认 `deepseek-official`
 - 凭据只写进被 git 忽略的 `.env.local`，变量名与 profile 的 `credentialEnv` 一一对应（如 `DEEPSEEK_API_KEY`）
 - 语义检索：默认使用本地缓存的 `Xenova/bge-m3`（1024 维、ONNX int8）；可选优先调用 OpenAI-compatible Embedding 端点，端点未配置或失败时自动回退本地模型，远程和本地都不可用时才降级为纯词法检索，不报错
-- 价格与预算：`config/llm.json` 的 profile 可填写 provider 价格及每次 CompileRun 的 input/output token、估算美元上限；默认值为 `null`，未知价格不会被猜测
+- 价格与预算：`config/llm.json` 的 profile 可填写 provider 价格及每次 CompileRun 的 input/output token、估算美元上限；未明确配置的值保持 `null`，未知价格不会被猜测
 - `GET /api/health` 报告各 profile 的配置与连通状态（含语义检索就绪状态），不回显任何凭据
 
 ## 常用脚本

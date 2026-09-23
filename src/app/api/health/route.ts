@@ -7,7 +7,7 @@ import { WORLDLOOM_VERSION } from '@/lib/version';
 export const dynamic = 'force-dynamic';
 
 /**
- * Health endpoint with LLM connectivity detection (Phase 0 acceptance).
+ * Health endpoint with optional LLM connectivity detection.
  * Detection results are cached (60s) inside the client, so repeated polls
  * are cheap. A failed detection never turns the service "unhealthy" —
  * browsing/editing work without an LLM by design.

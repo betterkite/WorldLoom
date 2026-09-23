@@ -2,8 +2,10 @@
 
 ## 当前方案
 
-WorldLoom 使用 Reagraph 渲染 WebGL 图谱，许可证为 Apache-2.0。API 和 Prisma 数据模型
-提供节点、关系、因果边和时间切片，页面负责三视图、节点详情、邻居视图和布局切换。
+WorldLoom 优先使用 Reagraph 渲染 WebGL 图谱，许可证为 Apache-2.0。API 和 Prisma 数据模型
+提供节点、关系、因果边和时间切片，页面负责三视图、节点详情、邻居视图和布局切换；当
+浏览器没有可用 WebGL 或首次布局未及时完成时，页面自动显示确定性的 SVG 兼容图谱，节点
+点击、键盘访问和关系清单仍然可用。
 
 ## 交互约束
 
@@ -17,11 +19,12 @@ WorldLoom 使用 Reagraph 渲染 WebGL 图谱，许可证为 Apache-2.0。API �
 ## 实现注意
 
 1. Reagraph 画布是绝对定位元素，父容器必须使用 `position: relative` 并提供明确高度。
-2. 需要像素级自动验收时启用 `glOptions.preserveDrawingBuffer`。
+2. 需要像素级自动验收时启用 `glOptions.preserveDrawingBuffer`；若像素检查确认 WebGL 未绘制，
+   验收脚本必须确认 `[data-graph-fallback="true"]` 的 SVG 兼容渲染存在。
 3. 页面使用客户端挂载后初始化 WebGL，避免服务端渲染阶段访问浏览器 API。
 4. 大图应先在 API 层限制节点/边数量，再考虑更换渲染引擎。
 
 ## 验收
 
-图谱验收覆盖画布尺寸、实际像素绘制、节点详情、邻居视图、时间切片徽标、布局切换和空
-关系数据。修改图谱数据契约时，应同步更新 API 测试、页面验收和截图检查。
+图谱验收覆盖画布尺寸、实际像素绘制或 SVG 兼容渲染、节点详情、邻居视图、时间切片徽标、
+布局切换和空关系数据。修改图谱数据契约时，应同步更新 API 测试、页面验收和截图检查。

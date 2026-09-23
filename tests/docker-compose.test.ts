@@ -23,4 +23,10 @@ describe('production compose migration gate', () => {
       'pg_isready -U ${POSTGRES_USER:-worldloom} -d ${POSTGRES_DB:-worldloom}'
     );
   });
+
+  it('keeps the worker concurrency cap explicit in the app container', () => {
+    expect(compose).toContain(
+      'WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}'
+    );
+  });
 });
