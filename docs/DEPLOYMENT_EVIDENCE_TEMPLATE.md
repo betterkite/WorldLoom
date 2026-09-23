@@ -520,7 +520,8 @@ RPO/RTO。
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
-| 检索基准 | 500 entities、2000 events，12 samples，P95 192.5ms，RSS 增量 23.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
+| 检索基准 | 2026-09-23 UTC 本机复测（macOS arm64、`Mac17,5`、6 CPU、8 GiB）：500 entities、2000 events，12 queries，P50 47.4ms、P95/max 66.3ms；基准驱动进程 RSS 增量 38.2 MiB。仅本机 E2 基线，非目标部署 SLO | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
+| 本地 Compose 服务内存抽样 | 同次检索基准期间 Docker `stats` 仅采到 3 个快照（4.07s）：app 93.3→251.0 MiB、DB 71.5→83.9 MiB、已加载本地模型的 worker 1559.6→1560.6 MiB；这些是稀疏采样值，不是 cgroup 高水位或容量结论；采样不适用于远程 URL | `E2 / 限定范围` | 基准输出 `serviceContainerMemory`；Docker `stats --no-stream`，250ms poll delay |
 | 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
 | 生产运行时镜像安全扫描（本地复测） | distroless Node 24 Debian 13，Trivy `os,library` 严格扫描 `CRITICAL,HIGH` 为 0；仅证明该构建与扫描时点 | `E1/E2` | `docker build ...`；Trivy JSON 报告与 SHA-256 归档 |
 | CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |

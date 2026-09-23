@@ -2,7 +2,8 @@
 /**
  * 固定规模检索基准（ISS-34 P2）：
  *   500 entities + 2000 chronicle events，走真实 HTTP API，验证词法检索
- *   在目标规模下的 P50/P95、命中有效性和进程内存变化。
+ *   在固定规模下的 P50/P95、命中有效性、基准驱动进程 RSS，以及本地
+ *   loopback Compose app/db/worker 的 Docker 内存抽样。
  *
  * 用法：
  *   node scripts/benchmark-retrieval.mjs [baseUrl]
@@ -14,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { PrismaClient } from '@prisma/client';
+import { startDockerMemorySampler } from './docker-memory.mjs';
 
 const BASE = process.argv[2] ?? 'http://localhost:4310';
 const ENTITY_COUNT = 500;
@@ -49,10 +51,12 @@ async function main() {
   ensureDatabaseUrl();
   const prisma = new PrismaClient({ log: ['error'] });
   let worldId;
+  let memorySampler;
   const startedAt = performance.now();
   const rssBefore = process.memoryUsage().rss;
 
   try {
+    memorySampler = await startDockerMemorySampler({ baseUrl: BASE });
     const world = await prisma.world.create({
       data: {
         name: `${PREFIX}${new Date().toISOString()}`,
@@ -111,6 +115,8 @@ async function main() {
       durations.push(await request(queries[index % queries.length]));
 
     const rssAfter = process.memoryUsage().rss;
+    const serviceContainerMemory = await memorySampler.stop();
+    memorySampler = null;
     const result = {
       baseUrl: BASE,
       scale: { entities: ENTITY_COUNT, events: EVENT_COUNT, relations: 0 },
@@ -121,18 +127,21 @@ async function main() {
         p95: Number(percentile(durations, 0.95).toFixed(1)),
         max: Number(Math.max(...durations).toFixed(1))
       },
-      rssDeltaMiB: mib(Math.max(0, rssAfter - rssBefore)),
+      benchmarkDriverRssDeltaMiB: mib(Math.max(0, rssAfter - rssBefore)),
+      serviceContainerMemory,
       elapsedSeconds: Number(((performance.now() - startedAt) / 1000).toFixed(1)),
       gates: {
         p95MsAtMost: MAX_P95_MS,
-        rssDeltaMiBAtMost: MAX_RSS_DELTA_MIB
+        benchmarkDriverRssDeltaMiBAtMost: MAX_RSS_DELTA_MIB
       }
     };
     const passed =
-      result.latencyMs.p95 <= MAX_P95_MS && result.rssDeltaMiB <= MAX_RSS_DELTA_MIB;
+      result.latencyMs.p95 <= MAX_P95_MS &&
+      result.benchmarkDriverRssDeltaMiB <= MAX_RSS_DELTA_MIB;
     console.log(JSON.stringify({ ...result, passed }, null, 2));
     if (!passed) process.exitCode = 1;
   } finally {
+    if (memorySampler) await memorySampler.stop();
     if (worldId) await prisma.world.delete({ where: { id: worldId } });
     await prisma.$disconnect();
   }
