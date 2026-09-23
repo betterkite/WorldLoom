@@ -57,6 +57,7 @@ pnpm dev                        # http://localhost:4310
 | `pnpm run audit` | 全量可用性审计：治理链播种 + 全部 API + 全部页面（50 项 PASS/FAIL） |
 | `node scripts/ui-shots.mjs` · `node scripts/ui-acceptance.mjs` | 页面验收：播种演示世界 + 全页截图 · 程序化 UI 验收（结构/几何/可达性/渲染证据/交互） |
 | `pnpm benchmark:retrieval [url]` | 固定规模检索基准：500 entities + 2000 events，输出 P50/P95/最大耗时与 RSS 变化并自动清理临时世界 |
+| `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` | 生成 CycloneDX 1.5 生产依赖 SBOM，包含 lockfile 摘要和源码 revision |
 | `pnpm db:backup:drill` | 在临时数据库执行 custom-format PostgreSQL 备份/恢复演练并自动清理，不替代生产备份系统 |
 | `pnpm deployment:preflight -- [--strict] [--require-semantic]` | 发布前配置检查；严格模式默认校验词法检索版，只有承诺语义增强版时才追加 `--require-semantic`；且不回显凭据 |
 | `pnpm acceptance [url]` | 真实模型全链路验收（创世 → 编译 → Lint → 问答 → 推演 → 导出 → MCP） |

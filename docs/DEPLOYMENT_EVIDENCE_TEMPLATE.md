@@ -286,6 +286,7 @@ RPO/RTO。
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
 | 检索基准 | 500 entities、2000 events，12 samples，P95 192.5ms，RSS 增量 23.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
+| 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
 | Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | 独立 Worker runtime smoke | 独立 worker 领取 queued `SemanticIndexJob`，1 次尝试完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |

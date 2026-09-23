@@ -29,6 +29,7 @@
     "lint:fix": "oxlint --fix && bun format",
     "lint:strict": "oxlint --deny-warnings",
     "license:audit": "node scripts/license-audit.mjs",
+    "sbom": "node scripts/generate-sbom.mjs",
     "prepare": "husky",
     "start": "next start -p 4310",
     "start:worker": "WORLDLOOM_WORKER=true next start -p 4310",
