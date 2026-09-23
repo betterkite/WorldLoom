@@ -39,4 +39,5 @@ pnpm license:audit
 - migration 服务成功后应用才启动。
 - 默认端口仍绑定回环地址；公网部署另行完成认证、TLS、限流和备份恢复演练。
 - `pnpm deployment:preflight -- --strict` 通过；承诺语义增强时再加 `--require-semantic`。
+- Full Compose 本地 Worker 验收应同时运行 `pnpm worker:smoke` 和 `pnpm worker:recovery-smoke`，分别证明 queued 领取与 stale heartbeat 恢复；两者均不替代生产故障注入和容量证据。
 - 生产环境完成真实 provider、目标规模检索/编译、迁移回滚和 worker 拓扑验证。

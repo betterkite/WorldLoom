@@ -34,7 +34,8 @@
     "start:worker": "WORLDLOOM_WORKER=true next start -p 4310",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "worker:smoke": "node scripts/worker-smoke.mjs"
+    "worker:smoke": "node scripts/worker-smoke.mjs",
+    "worker:recovery-smoke": "node scripts/worker-smoke.mjs --stale-running"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

@@ -80,6 +80,11 @@ DB 任务轮询。迁移服务失败时，Compose 不会满足 app/worker 的 `s
 结束时通过级联删除清理。它是本地 `E2` runtime 证据，不能替代生产 worker 的故障注入、容量、跨主机
 lease 和滚动发布演练。
 
+同一环境可运行 `pnpm worker:recovery-smoke` 验证一个带过期 heartbeat 的 `running` 任务会被独立
+worker 重新领取（attempts 至少增加一次）、完成索引并只持久化预期向量；该命令同样只使用临时世界
+并在 finally 中清理。它覆盖本地 stale-recovery 的 `E2` 契约，不等于生产进程杀停、跨主机 lease、
+容量或滚动发布证据。
+
 ## 任务运行模型与规模边界
 
 `CompileRun/CompileChunk` 与 `SemanticIndexJob` 都是数据库持久化任务，具有 checkpoint、心跳和陈旧任务回收。当前 Next 进程会在提交请求后触发本地 runner，因此：

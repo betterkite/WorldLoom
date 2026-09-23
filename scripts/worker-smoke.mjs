@@ -2,18 +2,23 @@
 /**
  * Independent worker runtime smoke test.
  *
- * Inserts one queued semantic-index job directly into PostgreSQL, waits for
- * the separately running WORLDLOOM_WORKER=true process to claim it, and
- * verifies that one vector was persisted. It never calls the web process and
- * removes the temporary world on completion.
+ * Inserts one semantic-index job directly into PostgreSQL, waits for the
+ * separately running WORLDLOOM_WORKER=true process to claim it, and verifies
+ * that one vector was persisted. It never calls the web process and removes
+ * the temporary world on completion.
  *
  * Usage: pnpm worker:smoke [timeoutMs]
+ *        pnpm worker:recovery-smoke [timeoutMs]
  */
 
 import { PrismaClient } from '@prisma/client';
 
-const timeoutMs = Number.parseInt(process.argv[2] ?? '45000', 10);
+const cliArgs = process.argv.slice(2);
+const recoveryMode = cliArgs.includes('--stale-running');
+const timeoutArg = cliArgs.find((arg) => /^\d+$/.test(arg));
+const timeoutMs = Number.parseInt(timeoutArg ?? '45000', 10);
 const pollMs = 500;
+const staleAgeMs = 125_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,8 +53,18 @@ async function main() {
       }
     });
 
+    const staleSince = new Date(Date.now() - staleAgeMs);
     const job = await prisma.semanticIndexJob.create({
-      data: { worldId, version: 1, status: 'queued' },
+      data: recoveryMode
+        ? {
+            worldId,
+            version: 1,
+            status: 'running',
+            attempts: 1,
+            startedAt: staleSince,
+            lastHeartbeatAt: staleSince
+          }
+        : { worldId, version: 1, status: 'queued' },
       select: { id: true }
     });
     const deadline = Date.now() + timeoutMs;
@@ -60,9 +75,13 @@ async function main() {
       await sleep(pollMs);
     }
 
-    if (observed?.status !== 'completed' || observed.indexed !== 1) {
+    if (
+      observed?.status !== 'completed' ||
+      observed.indexed !== 1 ||
+      (recoveryMode && observed.attempts < 2)
+    ) {
       throw new Error(
-        `worker did not complete the job: status=${observed?.status ?? 'timeout'} indexed=${observed?.indexed ?? 0} error=${observed?.error ?? 'none'}`
+        `worker did not satisfy the contract: status=${observed?.status ?? 'timeout'} attempts=${observed?.attempts ?? 0} indexed=${observed?.indexed ?? 0} error=${observed?.error ?? 'none'}`
       );
     }
 
@@ -72,9 +91,12 @@ async function main() {
       JSON.stringify(
         {
           passed: true,
+          scenario: recoveryMode ? 'stale-running-recovery' : 'queued-claim',
+          initialStatus: recoveryMode ? 'running' : 'queued',
           jobId: job.id,
           status: observed.status,
           attempts: observed.attempts,
+          reclaimed: recoveryMode ? observed.attempts >= 2 : null,
           indexed: observed.indexed,
           vectors: vectorCount[0]?.count ?? 0,
           cleanup: 'temporary world deleted in finally'
