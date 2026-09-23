@@ -87,6 +87,10 @@ async function main() {
 
     const vectorCount = await prisma.$queryRaw`SELECT count(*)::int AS count
       FROM semantic_vectors WHERE "worldId" = ${worldId} AND version = 1`;
+    const vectors = Number(vectorCount[0]?.count ?? 0);
+    if (vectors !== 1) {
+      throw new Error(`worker persisted ${vectors} vectors; expected exactly 1`);
+    }
     console.log(
       JSON.stringify(
         {
@@ -98,7 +102,7 @@ async function main() {
           attempts: observed.attempts,
           reclaimed: recoveryMode ? observed.attempts >= 2 : null,
           indexed: observed.indexed,
-          vectors: vectorCount[0]?.count ?? 0,
+          vectors,
           cleanup: 'temporary world deleted in finally'
         },
         null,
