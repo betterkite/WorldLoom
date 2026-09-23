@@ -1,5 +1,8 @@
 # WorldLoom 生产镜像：Next.js standalone 输出 + pnpm
-FROM node:24-slim AS base
+# Debian 13 keeps the production base on a maintained security line. The
+# runtime stage removes package managers so their unrelated dependency tree is
+# not shipped into the application image.
+FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable
 # Prisma's native query engine needs the system OpenSSL libraries at install,
@@ -33,7 +36,10 @@ COPY prisma ./prisma
 ENV NODE_ENV=production
 CMD ["pnpm", "db:deploy"]
 
-FROM base AS runtime
+# Distroless keeps only the glibc/CA/Node runtime needed by the standalone
+# application. Pin the release digest so the production base is reproducible;
+# the weekly image refresh should update this digest after a fresh scan.
+FROM gcr.io/distroless/nodejs24-debian13@sha256:b1fc33242cc74151f50c62b4a03d48afd759dccf81279b5f8e401db4546479c1 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4310 HOSTNAME=0.0.0.0
 ARG VCS_REF=unknown
@@ -61,5 +67,6 @@ COPY --from=build /app/config ./config
 # prisma client + query engine are included by standalone tracing
 EXPOSE 4310
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD node -e "fetch('http://127.0.0.1:4310/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "server.js"]
+  CMD ["/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:4310/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+# The distroless base already provides /nodejs/bin/node as ENTRYPOINT.
+CMD ["server.js"]

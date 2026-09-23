@@ -4,6 +4,9 @@
 `PASS` 都必须能由部署方提供可复核的原始记录、命令输出、监控截图/导出、工单或报告链接。
 没有证据时必须写 `PENDING`，不得仅因为环境变量被设置为 `true` 就判定通过。
 
+**模板版本：** `1.1`　**适用范围：** WorldLoom 单次发布/变更　**默认时区：** UTC<br>
+**证据保管人：** `待填写`　**批准记录：** `待填写`　**最近修订：** `待填写`
+
 ## 使用边界
 
 - 本模板覆盖 WorldLoom 应用、PostgreSQL/pgvector、反向代理、LLM provider、embedding 回退和
@@ -13,6 +16,9 @@
 - 不在仓库或本文件记录 API key、数据库密码、原始用户素材、完整 provider 响应、个人信息或
   未脱敏的日志。外部证据只记录受控系统链接、报告编号和摘要哈希。
 - 若控制项不适用，必须写明理由、风险接受人和复核日期，不能留空。
+- 发布证据按“原始记录、派生摘要、复核决定”分层保存；派生摘要不能替代原始记录。
+- 所有时间统一记录为 UTC；执行人、自动化身份和复核人必须可追溯到组织身份或变更系统账号。
+- 证据链接应使用不可变版本、运行 ID、报告编号或对象版本；只给可变的首页、截图或 mutable tag 不足以支持审计。
 
 ## 0. 证据包治理与可验证性
 
@@ -36,6 +42,26 @@
 证据必须保持“原始记录 → 摘要 → 发布决策”的可追溯链路；发布后不得只修改摘要而不保留原始
 记录。涉及日志、素材、provider 响应或备份的证据，应先脱敏，再在受控存储中保存。证据包不能
 包含 API key、数据库密码、访问令牌或未脱敏的用户内容。
+
+建议证据包采用以下目录和清单结构；目录名可按组织系统调整，但不得丢失对应关系：
+
+| 路径/对象 | 内容 | 最低要求 |
+| --- | --- | --- |
+| `manifest.json` | 证据 ID、发布 SHA、环境、生成时间、保管期限、对象版本和文件 SHA-256 | 机器可读、不可变保存 |
+| `raw/` | CI 日志、扫描原始 JSON、镜像 inspect、迁移/备份/压测原始输出 | 保留原始格式，不只保留截图 |
+| `derived/` | 脱敏摘要、指标、RPO/RTO、风险汇总和本模板填写结果 | 每项指向 `raw/` 对象 |
+| `review/` | 复核意见、例外审批、签署记录、变更单和 incident 关联 | 记录身份、时间和决定 |
+
+`manifest.json` 至少应包含 `evidenceId`、`sourceRevision`、`environment`、`generatedAt`、
+`retentionUntil`、`classification`、`reviewer` 和每个对象的 `path`、`mediaType`、`sha256`、
+`sourceRunId`。若证据含个人数据、用户素材或 provider 响应，清单必须标明分类、脱敏方式和访问角色。
+
+### 0.1 发布放行规则
+
+- `GO`：所有阻塞控制项为 `PASS`，关键项至少为 `E3`；供应链、漏洞、备份恢复、回滚和故障恢复均有原始记录与复核，不存在未到期的高危例外。
+- `CONDITIONAL GO`：仅允许在明确列出剩余风险、补偿控制、风险接受人、到期日和回滚触发条件后使用；不能把 `PENDING`、`FAIL` 或缺失的生产证据改名为 `CONDITIONAL`。
+- `NO-GO`：任一阻塞项为 `FAIL`，或关键生产事实为 `PENDING/E0`，或签名/摘要/漏洞报告无法关联，或例外已过期。`NO-GO` 发布不得继续扩大流量。
+- 本模板记录的是证据和决定，不授予发布权限；最终决定必须由发布、技术、安全/隐私和运维职责人签署。
 
 ## 证据与状态规范
 
@@ -67,8 +93,11 @@
 | WorldLoom commit SHA | `待填写，40 位完整 SHA` |
 | GitHub Actions run / 构建链接 | `待填写` |
 | 容器镜像 digest | `待填写，禁止只写 mutable tag` |
+| 运行时基础镜像 / digest | `gcr.io/distroless/nodejs24-debian13@sha256:...`，按实际构建记录填写 |
+| 构建基础镜像 / digest | `node:24-trixie-slim@sha256:...`，按实际构建记录填写 |
 | Prisma migration 版本 | `待填写` |
 | SBOM / 依赖审计报告 | `待填写，链接或报告哈希` |
+| 漏洞数据库/扫描器版本 | `待填写，例如 Trivy 0.74.x；记录 DB 更新时间` |
 | 目标环境 / 区域 / 集群 | `待填写` |
 | 发布窗口（UTC） | `待填写` |
 | 执行人 | `待填写` |
@@ -94,6 +123,33 @@
 
 “有 CI 运行”不等于“制品可信”。至少要能从部署镜像反查源码、构建运行、SBOM 和 provenance；
 无法验证 subject digest、签名或漏洞例外时，`EV-01` 不得标记为 `PASS`。
+
+### 1.2 漏洞扫描与例外管理
+
+| 字段 | 发布记录 |
+| --- | --- |
+| 扫描器与版本 | `Trivy / 待填写版本` |
+| 扫描对象 | `生产镜像 digest；不得只扫描源码目录或 mutable tag` |
+| 包类型 | `os,library` |
+| 阈值 | `CRITICAL,HIGH；fixed 与 unfixed 均计入` |
+| 扫描数据库 | `数据库版本/更新时间/下载来源待填写` |
+| 扫描报告 | `不可变 artifact/对象版本 + SHA-256 待填写` |
+| 结果汇总 | `CRITICAL: 待填写；HIGH: 待填写；UNKNOWN/LOW/MEDIUM: 待填写` |
+| 例外状态 | `无 / 例外编号待填写；例外不写入默认忽略文件` |
+| 例外批准 | `安全负责人、风险接受人、补偿控制、到期日待填写` |
+| 复扫计划 | `修复版本、负责人、截止时间和关闭证据待填写` |
+
+漏洞例外必须逐项记录漏洞 ID、受影响包/版本、是否可达、影响评估、修复可用性、补偿控制和到期日。
+没有风险接受与期限的例外不得进入 `CONDITIONAL GO`；已过期或与部署镜像 digest 不匹配时必须 `NO-GO`。
+
+### 1.3 供应链证据最低闭环
+
+发布包必须能按以下链路回溯：
+
+`源码 commit → CI run → 构建基础镜像 digest → 生产镜像 digest → SBOM → 漏洞报告 → 签名 provenance/SBOM → 部署记录`
+
+每一步至少保存 subject/digest、生成时间、工具版本和下游引用。对于 GitHub Artifact Attestations，
+应同时保存验证命令和机器可读输出；仅保存 UI 绿色状态或截图不能证明 subject、签名者和源码 ref 一致。
 
 ## 2. 发布决策总表
 
@@ -287,13 +343,14 @@ RPO/RTO。
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
 | 检索基准 | 500 entities、2000 events，12 samples，P95 192.5ms，RSS 增量 23.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
 | 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
+| 生产运行时镜像安全扫描（本地复测） | distroless Node 24 Debian 13，Trivy `os,library` 严格扫描 `CRITICAL,HIGH` 为 0；仅证明该构建与扫描时点 | `E1/E2` | `docker build ...`；Trivy JSON 报告与 SHA-256 归档 |
 | CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
 | Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | 独立 Worker runtime smoke | 独立 worker 领取 queued `SemanticIndexJob`，1 次尝试完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |
 | 独立 Worker stale recovery | 独立 worker 重新领取过期 heartbeat 的 `running` 任务，attempts 至少增加 1，完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:recovery-smoke` |
 | 独立 Worker kill/restart recovery | 实际 `SIGKILL` worker 后启动时间变化，lease 过期后 attempts `1→2`，64/64 索引完成且向量 `64` 条无重复；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm run worker:chaos-smoke -- --timeout-ms=180000 --entities=64`；2026-09-23 UTC 脱敏输出已留存 |
-| CI / 容器 / E2E | 以对应 commit 的 GitHub Actions 为准 | `E1/E2` | `gh run view <run-id>` |
+| CI / 容器 / E2E | 以对应 commit 的 GitHub Actions 为准；漏洞门禁失败时必须登记失败报告和修复后的复跑 run，不得只保留成功截图 | `E1/E2` | `gh run view <run-id>` |
 
 ## 11. 证据索引
 
@@ -334,6 +391,8 @@ RPO/RTO。
 - [Google SRE Data Integrity](https://sre.google/sre-book/data-integrity/)：区分备份与可恢复性，要求以实际恢复能力、数据完整性和可接受的数据丢失量驱动设计。
 - [Google Cloud Disaster Recovery Scenarios for Data](https://docs.cloud.google.com/architecture/dr-scenarios-for-data)：RPO/RTO、恢复目标与数据库备份/日志链路的记录方式参考。
 - [SLSA v1.0 Producing Artifacts](https://slsa.dev/spec/v1.0/requirements) 与 [Distributing Provenance](https://slsa.dev/spec/v1.0/distributing-provenance)：构建 provenance、制品摘要和验证链路参考。
+- [GitHub Artifact Attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) 与 [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify)：签名制品证明、subject 绑定和验证输出参考。
+- [Trivy image scanning](https://github.com/aquasecurity/trivy) 与 [Trivy Action](https://github.com/aquasecurity/trivy-action)：容器 OS/语言包漏洞扫描、阈值和 CI 集成参考。
 - [NIST SP 800-61 Rev. 3](https://csrc.nist.gov/pubs/sp/800/61/r3/final)：事件准备、检测、响应、恢复和复盘参考。
 - [OpenTelemetry Logging Specification](https://opentelemetry.io/docs/specs/otel/logs/)：日志与 trace/span/request context 的关联参考。
 

@@ -246,9 +246,11 @@ jobs:
           image-ref: worldloom:ci
           format: json
           output: artifacts/worldloom-trivy.json
+          scanners: vuln
           vuln-type: os,library
           severity: CRITICAL,HIGH
           ignore-unfixed: false
+          version: v0.74.0
           exit-code: '1'
 
       - name: Upload vulnerability scan evidence
