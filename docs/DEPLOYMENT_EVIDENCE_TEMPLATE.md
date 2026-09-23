@@ -276,7 +276,7 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 100/100 通过 | `E1` | `pnpm test` |
+| 单元/集成测试 | 101/101 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | 严格部署 preflight | 6 pass、12 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |
