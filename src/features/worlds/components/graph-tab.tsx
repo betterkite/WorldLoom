@@ -456,7 +456,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
               edgeInterpolation='curved'
               edgeArrowPosition='end'
               draggable
-              animated
+              animated={false}
               actives={selectedUid ? [selectedUid] : []}
               onNodeClick={(node) => {
                 setSelectedUid(node.id);
