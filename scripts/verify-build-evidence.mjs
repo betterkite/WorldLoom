@@ -26,6 +26,9 @@ const revision = requiredOption('--revision');
 const sbomPath = requiredOption('--sbom');
 const imagePath = requiredOption('--image');
 const outputPath = requiredOption('--output');
+const vulnerabilityReportPath = args.includes('--vulnerability-report')
+  ? requiredOption('--vulnerability-report')
+  : null;
 const provenanceIndex = args.includes('--provenance') ? requiredOption('--provenance') : null;
 const provenanceArtifactPath = args.includes('--provenance-artifact')
   ? requiredOption('--provenance-artifact')
@@ -63,6 +66,30 @@ if (labels['org.opencontainers.image.revision'] !== revision) {
 }
 if (labels['org.opencontainers.image.title'] !== 'WorldLoom') {
   throw new Error('image title is not WorldLoom');
+}
+
+let vulnerabilityScan = null;
+if (vulnerabilityReportPath) {
+  const report = readJson(vulnerabilityReportPath);
+  if (!Array.isArray(report.Results)) {
+    throw new Error('Trivy report has no Results array');
+  }
+  const vulnerabilities = report.Results.flatMap((result) => result.Vulnerabilities ?? []);
+  const critical = vulnerabilities.filter((item) => item.Severity === 'CRITICAL').length;
+  const high = vulnerabilities.filter((item) => item.Severity === 'HIGH').length;
+  if (critical > 0 || high > 0) {
+    throw new Error(`Trivy report contains HIGH/CRITICAL findings: ${high} high, ${critical} critical`);
+  }
+  vulnerabilityScan = {
+    status: 'PASS',
+    scanner: 'Trivy',
+    policy: 'CRITICAL,HIGH; fixed and unfixed findings block the build',
+    results: report.Results.length,
+    vulnerabilities: vulnerabilities.length,
+    high,
+    critical,
+    reportSha256: sha256(vulnerabilityReportPath)
+  };
 }
 
 let provenance = null;
@@ -126,6 +153,10 @@ const evidence = {
     revision: labels['org.opencontainers.image.revision'],
     created: labels['org.opencontainers.image.created'],
     version: labels['org.opencontainers.image.version']
+  },
+  vulnerabilityScan: vulnerabilityScan ?? {
+    status: 'PENDING',
+    scanner: null
   },
   provenance: provenance
     ? {

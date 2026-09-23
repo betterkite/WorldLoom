@@ -237,6 +237,29 @@ jobs:
           revision="$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' worldloom:ci)"
           test "$revision" = "$GITHUB_SHA"
 
+      - name: Prepare security evidence directory
+        run: mkdir -p artifacts
+
+      - name: Scan production image for vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: worldloom:ci
+          format: json
+          output: artifacts/worldloom-trivy.json
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: '1'
+
+      - name: Upload vulnerability scan evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worldloom-vulnerability-scan-${{ github.sha }}
+          path: artifacts/worldloom-trivy.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Export production image for signed provenance
         if: github.event_name == 'push'
         run: |
@@ -350,6 +373,12 @@ jobs:
           name: worldloom-image-metadata-${{ github.sha }}
           path: evidence/image
 
+      - name: Download vulnerability scan evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: worldloom-vulnerability-scan-${{ github.sha }}
+          path: evidence/vulnerability
+
       - name: Download signed provenance evidence
         if: github.event_name == 'push'
         uses: actions/download-artifact@v7
@@ -397,6 +426,7 @@ jobs:
             --revision "$GITHUB_SHA" \
             --sbom evidence/sbom/worldloom-sbom.cdx.json \
             --image evidence/image/worldloom-image-inspect.json \
+            --vulnerability-report evidence/vulnerability/worldloom-trivy.json \
             "${provenance_args[@]}" \
             --output evidence/index.json
 

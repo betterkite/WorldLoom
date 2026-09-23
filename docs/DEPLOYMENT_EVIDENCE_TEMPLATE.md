@@ -89,7 +89,7 @@
 | 构建 provenance | CI 主分支构建通过 GitHub Artifact Attestations 生成签名 SLSA/in-toto provenance；subject 为本次构建导出的不可变镜像归档 | `主分支 CI 已自动生成；具体 run/artifact 待登记` | `CONDITIONAL / E1` | `EV-01` |
 | provenance 校验 | evidence job 使用 `gh attestation verify` 校验签名、SLSA predicate、源码 revision 和 signer workflow；验证失败时阻断证据 job | `主分支 CI 已自动校验；具体输出待登记` | `CONDITIONAL / E1` | `EV-01` |
 | SBOM | 生成 SPDX 或 CycloneDX SBOM，记录格式版本、生成器和文件摘要，并对同一制品生成签名 SBOM attestation | `CycloneDX 1.5；主分支 CI 已自动生成并校验签名声明` | `CONDITIONAL / E1` | `EV-01` |
-| 漏洞门禁 | 记录扫描器、漏洞数据库快照、严重度阈值、结果和批准的例外 | `待填写` | `PENDING / E0` | `EV-01` |
+| 漏洞门禁 | CI 对生产镜像执行 Trivy `os,library` 扫描；`CRITICAL,HIGH`（含未修复项）非零即阻断，报告作为 artifact 保存；任何例外必须单独审批，不得通过忽略配置隐藏 | `主分支 CI 已自动执行；具体报告待登记` | `CONDITIONAL / E1` | `EV-01` |
 | 可复现性 | 独立重建摘要一致；若不一致，已记录差异、原因和风险接受 | `待填写` | `PENDING / E0` | `EV-01` |
 
 “有 CI 运行”不等于“制品可信”。至少要能从部署镜像反查源码、构建运行、SBOM 和 provenance；
@@ -287,7 +287,7 @@ RPO/RTO。
 | 本地 embedding 容器验收 | remote 未配置时，容器使用 `Xenova/bge-m3` 索引 8 条，检索模式为 `hybrid` 并命中 8 条 | `E2` | `pnpm embeddings:download`；Full Compose；`POST /api/worlds/:id/semantic-index` + `/search` |
 | 检索基准 | 500 entities、2000 events，12 samples，P95 192.5ms，RSS 增量 23.4 MiB；本机门槛通过 | `E2` | `pnpm benchmark:retrieval http://127.0.0.1:4310` |
 | 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
-| CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --provenance ... --sbom-provenance ...` |
+| CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |
 | Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
 | Full Compose 拓扑 | `db → migrate → app + worker`；worker 无宿主端口且固定 `WORLDLOOM_WORKER=true` | `E2` | `docker compose --profile full up -d --build`、`docker compose --profile full ps` |
 | 独立 Worker runtime smoke | 独立 worker 领取 queued `SemanticIndexJob`，1 次尝试完成并持久化 1 个向量；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |
