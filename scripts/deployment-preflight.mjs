@@ -3,6 +3,31 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+function loadEnvFile(fileName) {
+  const filePath = resolve(process.cwd(), fileName);
+  if (!existsSync(filePath)) return;
+
+  for (const line of readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$/);
+    if (!match) continue;
+
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[match[1]] === undefined) process.env[match[1]] = value;
+  }
+}
+
+// Match the environment files used by the local Next.js runtime. Explicitly
+// exported variables still win, so CI and deployment secret stores retain
+// precedence over local files.
+loadEnvFile('.env');
+loadEnvFile('.env.local');
+
 const args = new Set(process.argv.slice(2));
 const strict = args.has('--strict') || process.env.WORLDLOOM_PREFLIGHT_STRICT === 'true';
 const requireSemantic =
