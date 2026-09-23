@@ -211,12 +211,14 @@ jobs:
 
       - name: Build production image
         run: |
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           docker build \
             --build-arg VCS_REF="$GITHUB_SHA" \
-            --build-arg BUILD_DATE="${{ github.run_started_at }}" \
-            --build-arg VERSION="${{ github.sha }}" \
+            --build-arg BUILD_DATE="$build_date" \
+            --build-arg VERSION="$GITHUB_SHA" \
             --tag worldloom:ci .
-          test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' worldloom:ci)" = "$GITHUB_SHA"
+          revision="$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' worldloom:ci)"
+          test "$revision" = "$GITHUB_SHA"
 
       - name: Full Compose runtime smoke test
         run: |
