@@ -77,6 +77,9 @@ jobs:
       - name: Tests
         run: pnpm test
 
+      - name: Deployment preflight (local contract)
+        run: pnpm deployment:preflight
+
       - name: Build
         run: pnpm build
 
@@ -163,6 +166,9 @@ jobs:
           node scripts/ui-shots.mjs http://localhost:4310
           node scripts/ui-acceptance.mjs http://localhost:4310
 
+      - name: Full API and page audit
+        run: pnpm run audit http://localhost:4310
+
       - name: Upload UI evidence
         if: failure()
         uses: actions/upload-artifact@v7
@@ -205,3 +211,27 @@ jobs:
 
       - name: Build production image
         run: docker build --tag worldloom:ci .
+
+      - name: Full Compose runtime smoke test
+        run: |
+          set -eu
+          cleanup() {
+            docker compose --profile full down -v --remove-orphans
+          }
+          trap cleanup EXIT
+          docker compose --profile full up -d --build
+          for attempt in $(seq 1 60); do
+            app_status="$(docker inspect --format '{{.State.Health.Status}}' worldloom-app 2>/dev/null || true)"
+            worker_status="$(docker inspect --format '{{.State.Health.Status}}' worldloom-worker 2>/dev/null || true)"
+            if [ "$app_status" = healthy ] && [ "$worker_status" = healthy ]; then
+              break
+            fi
+            if [ "$attempt" = 60 ]; then
+              docker compose --profile full ps
+              docker compose --profile full logs --no-color --tail=120
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:4310/api/health
+          docker compose --profile full ps
