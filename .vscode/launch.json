@@ -22,9 +22,6 @@
         "pattern": "- Local:.+(https?://.+)",
         "uriFormat": "%s",
         "action": "debugWithChrome"
-      },
-      "env": {
-        "NEXT_PUBLIC_SENTRY_DISABLED": "true"
       }
     }
   ]
