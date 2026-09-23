@@ -17,7 +17,10 @@ const cleanEnvironment: NodeJS.ProcessEnv = {
   WORLDLOOM_BACKUP_RESTORE_CONFIRMED: 'false',
   WORLDLOOM_MIGRATION_ROLLBACK_CONFIRMED: 'false',
   WORLDLOOM_TARGET_SCALE_CONFIRMED: 'false',
-  WORLDLOOM_WORKER_TOPOLOGY_CONFIRMED: 'false'
+  WORLDLOOM_WORKER_TOPOLOGY_CONFIRMED: 'false',
+  WORLDLOOM_SUPPLY_CHAIN_CONFIRMED: 'false',
+  WORLDLOOM_OBSERVABILITY_CONFIRMED: 'false',
+  WORLDLOOM_PRIVACY_CONFIRMED: 'false'
 };
 
 describe('deployment preflight', () => {
@@ -69,6 +72,12 @@ describe('deployment preflight', () => {
     expect(result.stdout).toContain('gateway authentication: deployment fact is not confirmed');
     expect(result.stdout).toContain(
       'production migration rollback drill: deployment fact is not confirmed'
+    );
+    expect(result.stdout).toContain(
+      'supply-chain SBOM/provenance and vulnerability review: deployment fact is not confirmed'
+    );
+    expect(result.stdout).toContain(
+      'privacy and data-lifecycle review: deployment fact is not confirmed'
     );
     expect(result.stdout).toContain(
       'WORLDLOOM_WORKER_MAX_CONCURRENCY must be an integer from 1 to 32'

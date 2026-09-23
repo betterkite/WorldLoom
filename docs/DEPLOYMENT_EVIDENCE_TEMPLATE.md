@@ -279,8 +279,8 @@ RPO/RTO。
 | --- | --- | --- | --- |
 | 单元/集成测试 | 103/103 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
-| 严格部署 preflight | 6 pass、12 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
-| 严格部署 preflight（显式运行时预算覆盖） | 7 pass、11 failure；provider token/estimated-cost limits 通过，生产网关、TLS、备份恢复、worker 拓扑和容量等外部事实仍阻断发布 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
+| 严格部署 preflight | 6 pass、15 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
+| 严格部署 preflight（显式运行时预算覆盖） | 7 pass、14 failure；provider token/estimated-cost limits 通过，生产网关、TLS、备份恢复、worker 拓扑、容量、供应链、可观测性和隐私等外部事实仍阻断发布 | `E1` | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN=120000 WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN=24000 WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN=1.5 pnpm deployment:preflight -- --strict` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |
 | UI 验收 | 41/41，FAIL 0，WARN 0 | `E2` | `node scripts/ui-shots.mjs ...`、`node scripts/ui-acceptance.mjs ...` |
 | 本地备份恢复 | 26 表、5 世界，临时数据清理 | `E2` | `pnpm db:backup:drill` |

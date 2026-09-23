@@ -244,7 +244,10 @@ const deploymentFacts = [
   ['WORLDLOOM_BACKUP_RESTORE_CONFIRMED', 'production backup/restore drill'],
   ['WORLDLOOM_MIGRATION_ROLLBACK_CONFIRMED', 'production migration rollback drill'],
   ['WORLDLOOM_TARGET_SCALE_CONFIRMED', 'target-scale concurrency benchmark'],
-  ['WORLDLOOM_WORKER_TOPOLOGY_CONFIRMED', 'worker topology and capacity']
+  ['WORLDLOOM_WORKER_TOPOLOGY_CONFIRMED', 'worker topology and capacity'],
+  ['WORLDLOOM_SUPPLY_CHAIN_CONFIRMED', 'supply-chain SBOM/provenance and vulnerability review'],
+  ['WORLDLOOM_OBSERVABILITY_CONFIRMED', 'observability, alerting and incident runbook'],
+  ['WORLDLOOM_PRIVACY_CONFIRMED', 'privacy and data-lifecycle review']
 ];
 for (const [envName, label] of deploymentFacts) {
   if (process.env[envName] === 'true') pass(`${label}: deployment fact confirmed (${envName})`);
