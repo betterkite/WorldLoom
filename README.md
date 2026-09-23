@@ -117,6 +117,7 @@ World（世界）
 | [docs/UI_ACCEPTANCE.md](./docs/UI_ACCEPTANCE.md) | 页面验收记录（程序化检查矩阵） |
 | [docs/HANDOFF.md](./docs/HANDOFF.md) | 维护者上手、架构边界和验证入口 |
 | [docs/DEPLOYMENT_SECURITY.md](./docs/DEPLOYMENT_SECURITY.md) | **生产部署安全契约**（认证、限流、任务 worker、迁移、备份与上线门禁） |
+| [docs/DEPLOYMENT_EVIDENCE_TEMPLATE.md](./docs/DEPLOYMENT_EVIDENCE_TEMPLATE.md) | 部署方外部证据记录模板（不含凭据） |
 | [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md) | 需求文档（PRD） |
 | [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 第三方代码与依赖的开源归属、许可盘点 |
 

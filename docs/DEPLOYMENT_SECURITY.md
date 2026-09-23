@@ -64,6 +64,7 @@ pnpm deployment:preflight -- --strict
 `WORLDLOOM_TARGET_SCALE_CONFIRMED` 和 `WORLDLOOM_WORKER_TOPOLOGY_CONFIRMED`。
 这些变量不是自证安全的开关，而是发布工单/演练记录的绑定点；没有对应证据时必须保持
 `false` 或未设置，严格门禁应失败。
+建议使用 [部署证据记录模板](./DEPLOYMENT_EVIDENCE_TEMPLATE.md) 逐项留痕。
 
 `docker compose --profile full up -d --build` 会先运行一次性 `migrate` 服务，再启动 `app`；
 迁移服务失败时，Compose 不会满足 app 的 `service_completed_successfully` 条件。容器内默认连接
