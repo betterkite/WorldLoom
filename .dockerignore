@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.pnpm-store
+.cache
+legacy
+docs
+*.md
+!README.md
+tmp

@@ -1,0 +1,21 @@
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  esbuild: true
+  onnxruntime-node: true
+  prisma: true
+  protobufjs: false
+  sharp: true
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - prisma
+  - esbuild
+  - sharp
+overrides:
+  deepmerge-ts: ^8.0.0
+  next: ^16.3.3
+  postcss: ^8.5.25
+  sharp: ^0.35.4
+  '@types/react': 19.2.14
+  '@types/react-dom': 19.2.3

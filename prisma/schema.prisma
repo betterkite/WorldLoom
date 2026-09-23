@@ -1,0 +1,635 @@
+// WorldLoom — Prisma domain model.
+//
+// Versioning model: content rows (Epoch/Entity/ChronicleEvent/EventEdge/
+// RelationshipEvent) are immutable per version. A merge copies all rows from
+// the master version into `masterVersion + 1`, then applies pending Changes
+// in submission order (latest-wins conflicts are recorded in the audit ledger).
+// Cross-references between content rows use stable `uid`s (not row ids) so
+// they survive version copies.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------
+// World
+// ----------------------------------------
+
+model World {
+  id            String   @id @default(cuid())
+  name          String
+  premise       String   @default("")
+  style         String   @default("")
+  masterVersion Int      @default(1)
+  ingestMode    String   @default("review") // review | auto
+  calendarJson  String   @default("{}") // 自定义历法：{months:[{name,days}], yearLabel, leapRule:{everyYears,addDays}}
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  epochs        Epoch[]
+  entities      Entity[]
+  events        ChronicleEvent[]
+  edges         EventEdge[]
+  relations     RelationshipEvent[]
+  sources       Source[]
+  compileRuns   CompileRun[]
+  changes       Change[]
+  versions      WorldVersion[]
+  conflicts     ConflictRecord[]
+  tombstones    Tombstone[]
+  lintFindings  LintFinding[]
+  qaRecords     QaRecord[]
+  manuscripts   Manuscript[]
+  continuations Continuation[]
+  foreshadows   Foreshadow[]
+  evalCases     EvalCase[]
+  evalRuns      EvalRun[]
+  semanticIndexJobs SemanticIndexJob[]
+
+  @@map("worlds")
+}
+
+// ----------------------------------------
+// Versioned content rows
+// ----------------------------------------
+
+enum EntityKind {
+  character
+  location
+  organization
+  species
+  item
+  concept
+  rule
+  faction
+}
+
+enum Confidence {
+  EXTRACTED
+  INFERRED
+  AMBIGUOUS
+  UNVERIFIED
+}
+
+model Epoch {
+  id            String   @id @default(cuid())
+  worldId       String
+  version       Int
+  uid           String
+  name          String
+  order         Int
+  description   String   @default("")
+  startEventUid String?
+  endEventUid   String?
+  sourceRefs    String[] @default([]) // Source.uid references (provenance)
+  createdAt     DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, uid])
+  @@index([worldId, version])
+  @@map("epochs")
+}
+
+model Entity {
+  id         String     @id @default(cuid())
+  worldId    String
+  version    Int
+  uid        String
+  kind       EntityKind
+  name       String
+  aliases    String[]   @default([])
+  summary    String     @default("")
+  content    String     @default("")
+  confidence Confidence @default(INFERRED)
+  tags       String[]   @default([])
+  sourceRefs String[]   @default([]) // Source.uid references (provenance)
+  createdAt  DateTime   @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, uid])
+  @@index([worldId, version])
+  @@map("entities")
+}
+
+model ChronicleEvent {
+  id               String     @id @default(cuid())
+  worldId          String
+  version          Int
+  uid              String
+  title            String
+  summary          String     @default("")
+  content          String     @default("")
+  epochUid         String?
+  epochYear        Int? // 虚构纪年：纪元内第 N 年
+  epochMonth       Int? // 自定义历法下的月序（1-based）
+  epochDay         Int? // 自定义历法下的日序（1-based）
+  fictionPrecision String     @default("year") // year | month | day
+  sortOrder        Int // 全局排序键：epoch.order * 1e6 + year * 100 + month
+  locationUid      String?
+  participantUids  String[]   @default([])
+  confidence       Confidence @default(INFERRED)
+  sourceRefs       String[]   @default([]) // Source.uid references (provenance)
+  createdAt        DateTime   @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, uid])
+  @@index([worldId, version])
+  @@index([worldId, version, sortOrder])
+  @@map("chronicle_events")
+}
+
+// Causal edge between two chronicle events (cause → effect).
+model EventEdge {
+  id        String @id @default(cuid())
+  worldId   String
+  version   Int
+  causeUid  String
+  effectUid String
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, causeUid, effectUid])
+  @@index([worldId, version])
+  @@map("event_edges")
+}
+
+// Relationship progression is event-sourced: one row per relationship shift,
+// optionally anchored to a chronicle event. World state at time T = fold of
+// all relationship events up to T (time-sliced relationship graph).
+model RelationshipEvent {
+  id         String   @id @default(cuid())
+  worldId    String
+  version    Int
+  uid        String
+  eventUid   String?
+  subjectUid String
+  objectUid  String
+  relation   String // ally | rival | kin | master | member_of | located_at | custom:*
+  polarity   String   @default("establish") // establish | strengthen | weaken | terminate
+  note       String   @default("")
+  sourceRefs String[] @default([]) // Source.uid references (provenance)
+  createdAt  DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, uid])
+  @@index([worldId, version])
+  @@map("relationship_events")
+}
+
+// ----------------------------------------
+// Intake (raw sources; LLM compilation lands in Phase 2)
+// ----------------------------------------
+
+model Source {
+  id          String   @id @default(cuid())
+  worldId     String
+  uid         String
+  filename    String
+  mediaType   String   @default("text/markdown")
+  content     String
+  contentHash String
+  sizeBytes   Int
+  status      String   @default("staged") // staged | compiled
+  author      String   @default("local-user")
+  createdAt   DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, contentHash])
+  @@map("sources")
+}
+
+// ----------------------------------------
+// Durable compiler runs (ISS-31 / P0-1)
+// ----------------------------------------
+
+enum CompileRunKind {
+  source
+  chapter
+}
+
+enum CompileRunStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum CompileChunkStatus {
+  pending
+  analyzing
+  generating
+  completed
+  failed
+}
+
+model CompileRun {
+  id              String           @id @default(cuid())
+  worldId         String
+  kind            CompileRunKind
+  sourceId        String?
+  chapterId       String?
+  sourceHash      String
+  sourceFilename  String
+  context         Json
+  promptVersion   String           @default("compile-v1")
+  profileId       String?
+  model           String?
+  baseVersion     Int
+  totalChunks     Int
+  completedChunks Int              @default(0)
+  status          CompileRunStatus @default(queued)
+  batchId         String?
+  result          Json?
+  error           String?
+  attempts        Int              @default(0)
+  startedAt       DateTime?
+  lastHeartbeatAt DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  world  World          @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  chunks CompileChunk[]
+
+  @@index([worldId, status])
+  @@index([worldId, sourceId, sourceHash])
+  @@index([worldId, chapterId, sourceHash])
+  @@map("compile_runs")
+}
+
+model CompileChunk {
+  id             String             @id @default(cuid())
+  runId          String
+  index          Int
+  sourceStart    Int                @default(0)
+  sourceEnd      Int                @default(0)
+  content        String
+  contentHash    String
+  status         CompileChunkStatus @default(pending)
+  analysis       Json?
+  analysisMeta   Json?
+  generated      Json?
+  generationMeta Json?
+  error          String?
+  attempts       Int                @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  run CompileRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, index])
+  @@index([runId, status])
+  @@map("compile_chunks")
+}
+
+// Durable, resumable semantic-index refreshes. A merge may enqueue one job;
+// the worker can safely reclaim stale jobs after a process restart.
+enum SemanticIndexJobStatus {
+  queued
+  running
+  completed
+  failed
+}
+
+model SemanticIndexJob {
+  id              String                 @id @default(cuid())
+  worldId         String
+  version         Int
+  status          SemanticIndexJobStatus @default(queued)
+  attempts        Int                    @default(0)
+  indexed         Int                    @default(0)
+  error           String?
+  startedAt       DateTime?
+  lastHeartbeatAt DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version])
+  @@index([worldId, status])
+  @@map("semantic_index_jobs")
+}
+
+// ----------------------------------------
+// Governance: Change → merge → immutable WorldVersion
+// ----------------------------------------
+
+enum ChangeKind {
+  entity_upsert
+  entity_delete
+  event_upsert
+  event_delete
+  epoch_upsert
+  epoch_delete
+  relation_upsert
+  relation_delete
+}
+
+enum ChangeStatus {
+  pending
+  merged
+}
+
+model Change {
+  id            String       @id @default(cuid())
+  worldId       String
+  kind          ChangeKind
+  targetUid     String? // update/delete target; null for creates
+  payload       Json // validated content (full entity/event/epoch/relation)
+  candidatePayload Json? // immutable first candidate; payload may change during review
+  author        String       @default("local-user")
+  status        ChangeStatus @default(pending)
+  baseVersion   Int
+  revision      Int          @default(1)
+  conflict      Boolean      @default(false)
+  mergedVersion Int?
+  batchId       String?
+  provenance    Json?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, status])
+  @@map("changes")
+}
+
+model WorldVersion {
+  id            String   @id @default(cuid())
+  worldId       String
+  version       Int
+  parentVersion Int?
+  summary       String
+  changeCount   Int      @default(0)
+  conflictCount Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version])
+  @@map("world_versions")
+}
+
+model ConflictRecord {
+  id              String     @id @default(cuid())
+  worldId         String
+  version         Int
+  kind            ChangeKind
+  targetUid       String
+  changeId        String
+  earlierChangeId String?
+  reason          String // concurrent_target | stale_base_version
+  resolution      String     @default("latest_wins")
+  createdAt       DateTime   @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, version])
+  @@map("conflict_records")
+}
+
+enum FindingSeverity {
+  error
+  warning
+  info
+}
+
+enum FindingStatus {
+  open
+  ignored
+  fixed
+}
+
+enum QaStatus {
+  archived
+  sedimented
+}
+
+model Tombstone {
+  id               String     @id @default(cuid())
+  worldId          String
+  uid              String
+  kind             ChangeKind
+  deletedAtVersion Int
+  changeId         String
+  author           String
+  createdAt        DateTime   @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, uid])
+  @@map("tombstones")
+}
+
+// ----------------------------------------
+// Consistency findings (Phase 3 lint engine)
+// ----------------------------------------
+
+model LintFinding {
+  id          String          @id @default(cuid())
+  worldId     String
+  version     Int
+  rule        String // causal_inversion | dangling_reference | orphan_event | epoch_gap | duplicate_name | self_relation | dead_participant
+  severity    FindingSeverity
+  targetUid   String?
+  relatedUid  String?
+  message     String
+  fingerprint String // rule:targetUid:relatedUid — dedupe key across re-runs
+  status      FindingStatus   @default(open)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, version, fingerprint])
+  @@index([worldId, version, status])
+  @@map("lint_findings")
+}
+
+// ----------------------------------------
+// Assistant Q&A records (Phase 4) — 引用问答与沉淀
+// ----------------------------------------
+
+model QaRecord {
+  id               String   @id @default(cuid())
+  worldId          String
+  question         String
+  answer           String
+  citations        Json // [{n, kind:'entity'|'event', uid, name}]
+  retrieval        Json // {lexical, dense, rrf counts + mode}
+  sedimentStatus   QaStatus @default(archived)
+  sedimentChangeId String?
+  createdAt        DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, createdAt])
+  @@map("qa_records")
+}
+
+// ----------------------------------------
+// Manuscript studio & continuation engine (Phase 5) — 核心闭环
+// ----------------------------------------
+
+model Manuscript {
+  id             String   @id @default(cuid())
+  worldId        String
+  title          String
+  synopsis       String   @default("")
+  cursorEventUid String? // 叙事进度光标：故事"当前时刻"指向的编年史事件
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  world         World          @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  chapters      Chapter[]
+  continuations Continuation[]
+
+  @@index([worldId])
+  @@map("manuscripts")
+}
+
+model Chapter {
+  id           String    @id @default(cuid())
+  manuscriptId String
+  order        Int
+  title        String
+  content      String
+  status       String    @default("draft") // draft | final
+  finalAt      DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  manuscript Manuscript @relation(fields: [manuscriptId], references: [id], onDelete: Cascade)
+
+  @@unique([manuscriptId, order])
+  @@map("chapters")
+}
+
+model Continuation {
+  id                String   @id @default(cuid())
+  worldId           String
+  manuscriptId      String?
+  kind              String // event_suggestion | relation_shift | plot_arc
+  payload           Json // 候选内容（名称引用，采纳时解析为 uid）
+  rationale         String // 推演依据（引用既有事件/条目名称）
+  basisEventUid     String?
+  status            String   @default("pending") // pending | accepted | dismissed
+  acceptedChangeUid String?
+  createdAt         DateTime @default(now())
+
+  world      World       @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  manuscript Manuscript? @relation(fields: [manuscriptId], references: [id], onDelete: SetNull)
+
+  @@index([worldId, status])
+  @@map("continuations")
+}
+
+model Skill {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  description   String
+  instructions  String
+  version       String   @default("1.0.0")
+  retrievalJson String   @default("{}") // {topK?, directories?} — 检索策略（ADR-015C 精神）
+  target        String   @default("both") // assistant | genesis | both — 技能作用域
+  enabled       Boolean  @default(true)
+  builtin       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  revisions     SkillRevision[]
+
+  @@map("skills")
+}
+
+model SkillRevision {
+  id            String   @id @default(cuid())
+  skillId       String
+  version       String
+  description   String
+  instructions  String
+  retrievalJson String   @default("{}")
+  target        String   @default("both")
+  createdAt     DateTime @default(now())
+  restoredFromRevisionId String?
+
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  restoredFrom SkillRevision? @relation("SkillRevisionRestore", fields: [restoredFromRevisionId], references: [id], onDelete: SetNull)
+  restoredBy   SkillRevision[] @relation("SkillRevisionRestore")
+
+  @@unique([skillId, version])
+  @@index([skillId, createdAt])
+  @@index([restoredFromRevisionId])
+  @@map("skill_revisions")
+}
+
+// ----------------------------------------
+// Eval platform (Phase 7, P7-2) — 检索基准最小闭环
+// ----------------------------------------
+
+enum EvalRunMode {
+  lexical
+  hybrid
+  answer
+}
+
+model EvalCase {
+  id          String @id @default(cuid())
+  worldId     String
+  kind        String @default("retrieval") // retrieval | answer
+  query       String
+  expectedUid String @default("") // 检索评测：期望命中的条目/事件 uid
+  rubric      String @default("") // 答案评测：评分要点
+  note        String @default("")
+  world       World  @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId])
+  @@map("eval_cases")
+}
+
+model EvalRun {
+  id        String   @id @default(cuid())
+  worldId   String
+  version   Int
+  mode      EvalRunMode
+  score     Float // 命中率 0~1
+  results   Json // [{caseId, query, expectedUid, hit, rank}]
+  createdAt DateTime @default(now())
+  world     World    @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, createdAt])
+  @@map("eval_runs")
+}
+
+// ----------------------------------------
+// Foreshadowing (C-1) — 未回收伏笔，推演素材
+// ----------------------------------------
+
+model Foreshadow {
+  id               String   @id @default(cuid())
+  worldId          String
+  uid              String
+  title            String
+  detail           String   @default("")
+  status           String   @default("open") // open | resolved
+  plantedEventUid  String?
+  resolvedEventUid String?
+  createdAt        DateTime @default(now())
+  world            World    @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, status])
+  @@map("foreshadows")
+}

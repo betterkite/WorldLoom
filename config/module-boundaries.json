@@ -1,0 +1,20 @@
+{
+  "$comment": "WorldLoom 模块边界声明（文档级）。依赖方向：app -> features -> lib；lib 内部 domains 不得互相反向依赖；llm 是唯一允许发起外部模型调用的层。",
+  "schemaVersion": 1,
+  "layers": {
+    "app": ["features", "lib"],
+    "features": ["lib"],
+    "lib": []
+  },
+  "libDependencies": {
+    "llm": [],
+    "config": [],
+    "db": [],
+    "governance": ["db", "uid"],
+    "worldbuilding": ["db", "llm", "governance", "uid"],
+    "retrieval": ["db"],
+    "assistant": ["llm", "retrieval"],
+    "export": ["db"],
+    "mcp": ["worldbuilding", "assistant"]
+  }
+}

@@ -1,0 +1,59 @@
+# WorldLoom local development stack (Phase 0/1).
+# `docker compose up -d` starts PostgreSQL with the pgvector extension.
+# Host port 43133 — WorldLoom-owned local development port.
+# `docker compose --profile full up -d --build` additionally builds and runs the app container (port 4310).
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: worldloom-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-worldloom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-worldloom}
+      POSTGRES_DB: ${POSTGRES_DB:-worldloom}
+    ports:
+      - '127.0.0.1:43133:5432'
+    restart: unless-stopped
+    volumes:
+      - worldloom-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-worldloom} -d ${POSTGRES_DB:-worldloom}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    container_name: worldloom-app
+    profiles: ['full']
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${WORLDLOOM_CONTAINER_DATABASE_URL:-postgresql://${POSTGRES_USER:-worldloom}:${POSTGRES_PASSWORD:-worldloom}@db:5432/${POSTGRES_DB:-worldloom}}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      BUILD_STANDALONE: 'true'
+      WORLDLOOM_WORKER: ${WORLDLOOM_WORKER:-false}
+      WORLDLOOM_TLS_TERMINATED: ${WORLDLOOM_TLS_TERMINATED:-false}
+    ports:
+      - '127.0.0.1:4310:4310'
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    container_name: worldloom-migrate
+    profiles: ['full']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${WORLDLOOM_CONTAINER_DATABASE_URL:-postgresql://${POSTGRES_USER:-worldloom}:${POSTGRES_PASSWORD:-worldloom}@db:5432/${POSTGRES_DB:-worldloom}}
+    restart: 'no'
+
+volumes:
+  worldloom-db-data:

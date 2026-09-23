@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "defaultProfileId": "deepseek-official",
+  "profiles": {
+    "deepseek-official": {
+      "provider": "openai-compatible",
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com",
+      "credentialEnv": "DEEPSEEK_API_KEY",
+      "timeoutMs": 60000,
+      "maxRetries": 1,
+      "pricing": null,
+      "limits": null
+    },
+    "modelport": {
+      "provider": "openai-compatible",
+      "model": "local_qwen:qwen3.5-9b-q5km",
+      "baseUrl": "http://127.0.0.1:38082/v1",
+      "credentialEnv": "MODELPORT_API_KEY",
+      "timeoutMs": 60000,
+      "maxRetries": 0,
+      "pricing": null,
+      "limits": null
+    }
+  },
+  "embeddings": {
+    "enabled": true,
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "model": "BAAI/bge-m3",
+    "credentialEnv": "EMBEDDINGS_API_KEY",
+    "dimensions": 1024,
+    "batchSize": 32
+  },
+  "localEmbeddings": {
+    "enabled": true,
+    "model": "Xenova/bge-m3",
+    "dimensions": 1024,
+    "dtype": "int8",
+    "cacheDir": ".cache/worldloom-embeddings"
+  }
+}
