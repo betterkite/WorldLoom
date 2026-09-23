@@ -271,3 +271,43 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4310/api/health
           docker compose --profile full ps
+
+  evidence:
+    if: needs.verify.result == 'success' && needs.e2e.result == 'success' && needs.container.result == 'success'
+    needs: [verify, e2e, container]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Download dependency SBOM
+        uses: actions/download-artifact@v7
+        with:
+          name: worldloom-sbom-${{ github.sha }}
+          path: evidence/sbom
+
+      - name: Download image metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: worldloom-image-metadata-${{ github.sha }}
+          path: evidence/image
+
+      - name: Correlate release evidence
+        run: |
+          node scripts/verify-build-evidence.mjs \
+            --revision "$GITHUB_SHA" \
+            --sbom evidence/sbom/worldloom-sbom.cdx.json \
+            --image evidence/image/worldloom-image-inspect.json \
+            --output evidence/index.json
+
+      - name: Upload correlated evidence index
+        uses: actions/upload-artifact@v7
+        with:
+          name: worldloom-evidence-index-${{ github.sha }}
+          path: evidence/index.json
+          if-no-files-found: error
+          retention-days: 30
