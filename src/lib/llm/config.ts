@@ -132,7 +132,7 @@ export function getProfile(profileId?: string | null): LlmProfile {
   if (!profile) {
     throw new LlmConfigError('llm_profile_unknown', `LLM profile is not declared: ${id}`);
   }
-  return profile;
+  return applyRuntimeLimits(profile, defaultProfileId);
 }
 
 export function getDefaultProfileId(): string {
@@ -149,6 +149,44 @@ export type LlmLimits = {
   maxOutputTokensPerRun: number | null;
   maxEstimatedCostUsdPerRun: number | null;
 };
+
+const RUNTIME_LIMIT_ENV = {
+  maxInputTokensPerRun: 'WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN',
+  maxOutputTokensPerRun: 'WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN',
+  maxEstimatedCostUsdPerRun: 'WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN'
+} as const;
+
+function runtimePositiveInteger(envName: string): number | null | undefined {
+  const raw = process.env[envName];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function runtimePositiveNumber(envName: string): number | null | undefined {
+  const raw = process.env[envName];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Apply approved deployment overrides; invalid values remain fail-closed. */
+function applyRuntimeLimits(profile: LlmProfile, defaultProfileId: string): LlmProfile {
+  if (profile.id !== defaultProfileId) return profile;
+  const input = runtimePositiveInteger(RUNTIME_LIMIT_ENV.maxInputTokensPerRun);
+  const output = runtimePositiveInteger(RUNTIME_LIMIT_ENV.maxOutputTokensPerRun);
+  const cost = runtimePositiveNumber(RUNTIME_LIMIT_ENV.maxEstimatedCostUsdPerRun);
+  if (input === undefined && output === undefined && cost === undefined) return profile;
+
+  return {
+    ...profile,
+    limits: {
+      maxInputTokensPerRun: input ?? profile.limits?.maxInputTokensPerRun ?? null,
+      maxOutputTokensPerRun: output ?? profile.limits?.maxOutputTokensPerRun ?? null,
+      maxEstimatedCostUsdPerRun: cost ?? profile.limits?.maxEstimatedCostUsdPerRun ?? null
+    }
+  };
+}
 
 /** Pricing is deliberately optional; never infer or hard-code provider rates. */
 export function getProfilePricing(profileId?: string | null): LlmPricing | null {

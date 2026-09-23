@@ -42,6 +42,7 @@ pnpm dev                        # http://localhost:4310
 - 凭据只写进被 git 忽略的 `.env.local`，变量名与 profile 的 `credentialEnv` 一一对应（如 `DEEPSEEK_API_KEY`）
 - 语义检索：默认使用本地缓存的 `Xenova/bge-m3`（1024 维、ONNX int8）；可选优先调用 OpenAI-compatible Embedding 端点，端点未配置或失败时自动回退本地模型，远程和本地都不可用时才降级为纯词法检索，不报错
 - 价格与预算：`config/llm.json` 的 profile 可填写 provider 价格及每次 CompileRun 的 input/output token、估算美元上限；未明确配置的值保持 `null`，未知价格不会被猜测
+- 部署时也可通过 `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN`、`WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN` 和 `WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN` 注入默认 profile 的批准上限；缺失或非法覆盖不会放宽门禁，严格 preflight 仍会失败
 - `GET /api/health` 报告各 profile 的配置与连通状态（含语义检索就绪状态），不回显任何凭据
 
 ## 常用脚本

@@ -65,7 +65,30 @@ function isFiniteNonNegative(value) {
 
 function checkProfileBudget(profileId, profile) {
   const pricing = profile.pricing;
-  const limits = profile.limits;
+  let limits = profile.limits;
+  if (profileId === config?.defaultProfileId) {
+    const parsePositiveInteger = (envName) => {
+      if (process.env[envName] === undefined) return undefined;
+      const value = Number(process.env[envName]);
+      return Number.isInteger(value) && value > 0 ? value : null;
+    };
+    const parsePositiveNumber = (envName) => {
+      if (process.env[envName] === undefined) return undefined;
+      const value = Number(process.env[envName]);
+      return Number.isFinite(value) && value > 0 ? value : null;
+    };
+    const input = parsePositiveInteger('WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN');
+    const output = parsePositiveInteger('WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN');
+    const cost = parsePositiveNumber('WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN');
+    if (input !== undefined || output !== undefined || cost !== undefined) {
+      limits = {
+        ...(limits ?? {}),
+        ...(input !== undefined ? { maxInputTokensPerRun: input } : {}),
+        ...(output !== undefined ? { maxOutputTokensPerRun: output } : {}),
+        ...(cost !== undefined ? { maxEstimatedCostUsdPerRun: cost } : {})
+      };
+    }
+  }
   const pricingValid =
     pricing &&
     isFiniteNonNegative(pricing.inputUsdPerMillion) &&

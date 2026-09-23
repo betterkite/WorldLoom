@@ -37,6 +37,22 @@ describe('deployment preflight', () => {
     expect(output).not.toContain('DEEPSEEK_API_KEY=');
   });
 
+  it('accepts explicit runtime budget overrides without treating them as provider balance', () => {
+    const output = execFileSync(process.execPath, [script], {
+      cwd: process.cwd(),
+      env: {
+        ...cleanEnvironment,
+        WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN: '120000',
+        WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN: '24000',
+        WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN: '1.5'
+      },
+      encoding: 'utf8'
+    });
+
+    expect(output).toContain('token and estimated-cost limits are configured');
+    expect(output).not.toContain('balance');
+  });
+
   it('fails strict mode until provider and production deployment facts are supplied', () => {
     const result = spawnSync(process.execPath, [script, '--strict', '--require-semantic'], {
       cwd: process.cwd(),

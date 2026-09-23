@@ -43,6 +43,12 @@
 时，系统不会猜测每次运行上限，也不会把未知价格伪装成成本；一旦配置上限，编译 runner 会在
 继续写入下一个候选前检查 token/估算成本，超限任务进入 failed 并保留错误记录。
 
+正式部署也可以通过 `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN`、
+`WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN` 和
+`WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN` 为默认 profile 注入批准的运行时上限，适用于
+同一制品在不同账户/环境发布的场景。环境变量只覆盖对应字段；缺失字段沿用配置文件值，非法值按
+`null` 处理并使严格 preflight 失败。它们不是额度查询，也不会从 provider 自动推导账户余额。
+
 发布前可运行 `pnpm deployment:preflight` 做结构检查；脚本会读取被 Git 忽略的 `.env` 和
 `.env.local`（已导出的环境变量优先），只输出变量名和配置状态，不输出任何凭据。
 词法检索版正式发布必须在部署环境中运行严格门禁：

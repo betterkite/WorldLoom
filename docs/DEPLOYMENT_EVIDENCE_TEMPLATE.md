@@ -147,6 +147,7 @@
 | 超限行为 | `必须 fail-closed，不写入不完整正史` |
 | usage 不完整行为 | `必须拒绝无法验证预算的任务` |
 | 预算告警阈值与接收人 | `待填写` |
+| 运行时预算覆盖 | `WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN`、`WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN`、`WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN`（如使用，记录批准来源） |
 | 对应环境变量/配置提交 | `待填写` |
 
 验收要求：价格和上限来自当前 provider 合同或批准的预算，而不是猜测；执行一次脱敏真实
@@ -276,7 +277,7 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 101/101 通过 | `E1` | `pnpm test` |
+| 单元/集成测试 | 103/103 通过 | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | 严格部署 preflight | 6 pass、12 failure；生产发布门禁保持阻断 | `E1` | `pnpm deployment:preflight -- --strict` |
 | API 可用性审计 | 50/50 通过 | `E2` | `pnpm run audit http://localhost:4310` |

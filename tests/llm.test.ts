@@ -3,6 +3,7 @@ import {
   getProfile,
   getDefaultProfileId,
   getEmbeddingsConfig,
+  getProfileLimits,
   listProfileIds,
   isCredentialConfigured,
   LlmConfigError
@@ -41,6 +42,38 @@ describe('llm config (locked profiles)', () => {
     expect(isCredentialConfigured(getProfile('deepseek-official'))).toBe(true);
     delete process.env.DEEPSEEK_API_KEY;
     expect(isCredentialConfigured(getProfile('deepseek-official'))).toBe(false);
+  });
+
+  it('applies approved runtime budget overrides and fails closed on invalid values', () => {
+    const names = [
+      'WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN',
+      'WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN'
+    ] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      process.env.WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN = '120000';
+      process.env.WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN = '24000';
+      process.env.WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN = '1.5';
+      expect(getProfileLimits('deepseek-official')).toEqual({
+        maxInputTokensPerRun: 120000,
+        maxOutputTokensPerRun: 24000,
+        maxEstimatedCostUsdPerRun: 1.5
+      });
+
+      process.env.WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN = 'not-a-number';
+      expect(getProfileLimits('deepseek-official')).toMatchObject({
+        maxInputTokensPerRun: 120000,
+        maxOutputTokensPerRun: null,
+        maxEstimatedCostUsdPerRun: 1.5
+      });
+      expect(getProfileLimits('modelport')).toBeNull();
+    } finally {
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+    }
   });
 });
 
