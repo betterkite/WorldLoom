@@ -33,6 +33,7 @@ describe('deployment preflight', () => {
     expect(output).toContain('provider pricing table is configured');
     expect(output).toContain('token and estimated-cost limits are not fully configured');
     expect(output).toContain('gateway authentication: deployment fact is not confirmed');
+    expect(output).toContain('WORLDLOOM_WORKER_MAX_CONCURRENCY is not explicit');
     expect(output).not.toContain('DEEPSEEK_API_KEY=');
   });
 
@@ -52,6 +53,9 @@ describe('deployment preflight', () => {
     expect(result.stdout).toContain('gateway authentication: deployment fact is not confirmed');
     expect(result.stdout).toContain(
       'production migration rollback drill: deployment fact is not confirmed'
+    );
+    expect(result.stdout).toContain(
+      'WORLDLOOM_WORKER_MAX_CONCURRENCY must be an integer from 1 to 32'
     );
     expect(result.stdout).not.toContain('DEEPSEEK_API_KEY=');
   });
