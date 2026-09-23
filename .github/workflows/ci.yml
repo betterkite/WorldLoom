@@ -237,6 +237,24 @@ jobs:
           revision="$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' worldloom:ci)"
           test "$revision" = "$GITHUB_SHA"
 
+      - name: Verify production image identity and dotenv exclusion
+        run: |
+          set -eu
+          image_user="$(docker image inspect --format '{{.Config.User}}' worldloom:ci)"
+          test "$image_user" = "65532:65532"
+          docker run --rm --entrypoint /nodejs/bin/node worldloom:ci -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            if (process.getuid() !== 65532) throw new Error("production image is not running as UID 65532");
+            function inspect(directory) {
+              for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+                if (/^\.env/.test(entry.name)) throw new Error("dotenv file found in image: " + path.join(directory, entry.name));
+                if (entry.isDirectory()) inspect(path.join(directory, entry.name));
+              }
+            }
+            inspect("/app");
+          '
+
       - name: Prepare security evidence directory
         run: mkdir -p artifacts
 
@@ -371,8 +389,28 @@ jobs:
           worker_ids="$(docker compose --profile full ps -q worker)"
           worker_1="$(printf '%s\n' "$worker_ids" | sed -n '1p')"
           worker_2="$(printf '%s\n' "$worker_ids" | sed -n '2p')"
-          probe_path=/app/worker-replica-claim-smoke.mjs
-          docker cp scripts/worker-replica-claim-smoke.mjs "$app_id:$probe_path"
+          assert_runtime_hardening() {
+            service="$1"
+            container_id="$2"
+            user="$(docker inspect --format '{{.Config.User}}' "$container_id")"
+            read_only="$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")"
+            cap_drop="$(docker inspect --format '{{json .HostConfig.CapDrop}}' "$container_id")"
+            security_opt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container_id")"
+            pids_limit="$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$container_id")"
+            test "$user" = "65532:65532"
+            test "$read_only" = "true"
+            test "$pids_limit" = "256"
+            case "$cap_drop" in *'"ALL"'*) ;; *) echo "$service did not drop all capabilities: $cap_drop"; exit 1 ;; esac
+            case "$security_opt" in *'no-new-privileges:true'*) ;; *) echo "$service lacks no-new-privileges: $security_opt"; exit 1 ;; esac
+            printf 'service=%s container=%s user=%s readonlyRootfs=%s capDrop=%s securityOpt=%s pidsLimit=%s\n' \
+              "$service" "$container_id" "$user" "$read_only" "$cap_drop" "$security_opt" "$pids_limit" \
+              >> artifacts/worldloom-runtime-hardening.txt
+          }
+          mkdir -p artifacts
+          : > artifacts/worldloom-runtime-hardening.txt
+          assert_runtime_hardening app "$app_id"
+          assert_runtime_hardening worker "$worker_1"
+          assert_runtime_hardening worker "$worker_2"
           for selected_worker in "$worker_1" "$worker_2"; do
             if [ "$selected_worker" = "$worker_1" ]; then other_worker="$worker_2"; else other_worker="$worker_1"; fi
             docker stop "$other_worker" >/dev/null
@@ -388,11 +426,20 @@ jobs:
               exit 1
             fi
             echo "Probing isolated worker replica $selected_number ($selected_worker)"
-            docker exec "$app_id" /nodejs/bin/node "$probe_path"
+            docker exec -i "$app_id" /nodejs/bin/node - < scripts/worker-replica-claim-smoke.mjs
             docker start "$other_worker" >/dev/null
           done
           restore_workers
           docker compose --profile full ps
+
+      - name: Upload runtime hardening evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worldloom-runtime-hardening-${{ github.sha }}
+          path: artifacts/worldloom-runtime-hardening.txt
+          if-no-files-found: warn
+          retention-days: 30
 
   evidence:
     if: needs.verify.result == 'success' && needs.e2e.result == 'success' && needs.container.result == 'success'

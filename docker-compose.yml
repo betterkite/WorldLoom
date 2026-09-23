@@ -45,6 +45,14 @@ services:
       # stays outside Git and the production image. Mount it read-only at the
       # path used by the local embedding fallback.
       - ./.cache/worldloom-embeddings:/app/.cache/worldloom-embeddings:ro
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+      - /app/.next/cache:rw,noexec,nosuid,size=256m,uid=65532,gid=65532,mode=0755
     ports:
       - '127.0.0.1:4310:4310'
     restart: unless-stopped
@@ -68,6 +76,13 @@ services:
       WORLDLOOM_TLS_TERMINATED: ${WORLDLOOM_TLS_TERMINATED:-false}
     volumes:
       - ./.cache/worldloom-embeddings:/app/.cache/worldloom-embeddings:ro
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
     # The worker uses the same standalone image but is not reachable through a
     # published host port. Next instrumentation starts only the DB-backed poller.
     restart: unless-stopped

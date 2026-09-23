@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const compose = readFileSync(resolve(process.cwd(), 'docker-compose.yml'), 'utf8');
 const dockerfile = readFileSync(resolve(process.cwd(), 'Dockerfile'), 'utf8');
+const dockerignore = readFileSync(resolve(process.cwd(), '.dockerignore'), 'utf8');
 const localEmbeddings = readFileSync(
   resolve(process.cwd(), 'src/lib/llm/local-embeddings.ts'),
   'utf8'
@@ -13,7 +14,9 @@ describe('production compose migration gate', () => {
   it('runs migrations before the app accepts traffic', () => {
     expect(compose).toContain('target: migrate');
     expect(compose).toContain('condition: service_completed_successfully');
-    expect(dockerfile).toContain('CMD ["pnpm", "db:deploy"]');
+    expect(dockerfile).toContain(
+      'CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]'
+    );
   });
 
   it('does not pass the host DATABASE_URL into containers by accident', () => {
@@ -42,6 +45,16 @@ describe('production compose migration gate', () => {
     expect(dockerfile).toContain('ARG VCS_REF=unknown');
   });
 
+  it('runs the application image as a non-root user', () => {
+    expect(dockerfile).toContain('USER 65532:65532');
+    expect(dockerfile).toContain('USER node');
+  });
+
+  it('excludes dotenv files from Docker build contexts', () => {
+    expect(dockerignore).toMatch(/^\.env\*/m);
+    expect(dockerignore).toMatch(/^\*\*\/\.env\*/m);
+  });
+
   it('keeps local embedding runtime as a statically traceable server dependency', () => {
     expect(localEmbeddings).toContain("from '@huggingface/transformers'");
     expect(dockerfile).toContain('COPY --from=build /app/.next/standalone ./');
@@ -61,6 +74,20 @@ describe('production compose migration gate', () => {
     const mount = './.cache/worldloom-embeddings:/app/.cache/worldloom-embeddings:ro';
     expect(appBlock).toContain(mount);
     expect(workerBlock).toContain(mount);
+  });
+
+  it('hardens the app and worker runtime with read-only filesystems and least privilege', () => {
+    const appBlock = compose.match(/\n  app:\n([\s\S]*?)(?=\n  worker:)/)?.[1] ?? '';
+    const workerBlock = compose.match(/\n  worker:\n([\s\S]*?)(?=\n  migrate:)/)?.[1] ?? '';
+
+    for (const serviceBlock of [appBlock, workerBlock]) {
+      expect(serviceBlock).toContain('read_only: true');
+      expect(serviceBlock).toContain("cap_drop: ['ALL']");
+      expect(serviceBlock).toContain('no-new-privileges:true');
+      expect(serviceBlock).toContain('pids_limit: 256');
+      expect(serviceBlock).toContain('/tmp:rw,noexec,nosuid');
+    }
+    expect(appBlock).toContain('/app/.next/cache:rw,noexec,nosuid');
   });
 
   it('defines a scalable full-profile worker without publishing a host port', () => {

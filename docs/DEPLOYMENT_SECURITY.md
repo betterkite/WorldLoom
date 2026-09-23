@@ -7,6 +7,7 @@
 ### 1. 网关认证与网络隔离
 
 - 应用容器的 4310 端口只允许被反向代理或受控内网访问；公网安全组不得直接放行 4310。
+- 仓库提供的 app/worker Compose 服务以非 root 用户运行，启用只读根文件系统、丢弃所有 Linux capabilities、`no-new-privileges` 与 PID 上限；仅 `/tmp` 和 app 的 Next image cache 使用有界 tmpfs。部署方仍需验证所用 Compose/Docker 版本、宿主机 daemon 与平台安全策略。
 - 反向代理必须执行 OIDC、SAML、Basic Auth 或等价的组织身份认证；应用自身目前没有多租户认证与授权模型。
 - 代理必须清理客户端提交的 `X-Forwarded-*`，再由代理写入可信的 scheme/host/client-ip 信息；应用日志中的 correlation id 必须与网关请求 id 关联。
 - 必须启用 TLS、HSTS、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` 和合适的 CSP；不要把数据库端口暴露到公网。

@@ -34,7 +34,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma ./prisma
 ENV NODE_ENV=production
-CMD ["pnpm", "db:deploy"]
+USER node
+CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
 
 # Distroless keeps only the glibc/CA/Node runtime needed by the standalone
 # application. Pin the release digest so the production base is reproducible;
@@ -65,6 +66,7 @@ COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/config ./config
 # prisma client + query engine are included by standalone tracing
+USER 65532:65532
 EXPOSE 4310
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
   CMD ["/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:4310/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

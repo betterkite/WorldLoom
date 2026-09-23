@@ -4,7 +4,7 @@
 
 | 编号 | 优先级 | 问题 | 验收条件 | 状态 | GitHub issue |
 | --- | --- | --- | --- | --- | --- |
-| ISS-30 | P1 | 部署安全证据仍依赖部署方 | 外部认证、限流压测、生产备份恢复、迁移回滚和目标规模压测均有记录 | 模板 v1.4 增补部署范围/信任边界、控制责任/例外、身份生命周期、API 滥用防护、漏洞披露闭环、provider 数据处理、加密/密钥轮换及 OWASP LLM 风险验证；外部认证、生产备份恢复、迁移回滚、目标容量等实证仍待部署方提供 | [#1](https://github.com/betterkite/WorldLoom/issues/1) |
+| ISS-30 | P1 | 部署安全证据仍依赖部署方 | 外部认证、限流压测、生产备份恢复、迁移回滚和目标规模压测均有记录 | 模板 v1.5 补充部署范围/信任边界、控制责任/例外、身份生命周期、OWASP API 与 LLM 风险、CIS Docker 运行时基线、隐私框架、漏洞披露闭环、provider 数据处理、加密/密钥轮换；2026-09-24 本机 Compose app/worker/migrate 已切换非 root，app/worker 只读根文件系统、capabilities 全丢弃、no-new-privileges/PID 上限和受限 tmpfs 生效；app health 200，worker 临时任务领取及清理通过，镜像不含 `.env*`。外部认证、生产备份恢复、迁移回滚、目标容量、宿主机/CIS 全量核验等实证仍待部署方提供 | [#1](https://github.com/betterkite/WorldLoom/issues/1) |
 | ISS-31 | P1 | 独立 worker 拓扑尚未做生产级验证 | lease、并发上限、重试预算、故障恢复和幂等写入通过演练 | 已加 3 次 stale recovery 上限；2026-09-23 UTC 本地 full Compose 复测通过 queued claim、本地 `Xenova/bge-m3` 成功索引、stale lease 恢复及 64 条目 SIGKILL/restart 幂等演练（64 向量、无重复）；CI run [35903165178](https://github.com/betterkite/WorldLoom/actions/runs/35903165178) 验证两个不同 Compose worker 副本分别领取独立队列任务（每项 1 次尝试），DB 并发 CAS 集成测试通过。CI 空 fixture 不执行 provider；生产 HA、全局并发预算、容量/SLO 和目标部署环境故障演练仍待完成 | [#2](https://github.com/betterkite/WorldLoom/issues/2) |
 | ISS-32 | P1 | 正式 provider 的价格与预算值需要按部署合同填写 | 严格 preflight 通过，预算/告警值与合同或批准额度一致 | 已加 90 天价格证据门禁、CompileRun 持久化 guard 和其他 LLM 操作级累计软 guard（CI 35898154828 通过）；真实批准 limits、账户级硬额度/告警及正式严格 preflight 仍待部署方提供 | [#3](https://github.com/betterkite/WorldLoom/issues/3) |
 | ISS-33 | P2 | 真实创作质量仍需持续观察 | 连续真实素材试用形成质量、耗时、成本和阻塞记录 | 暂缓 | [#4](https://github.com/betterkite/WorldLoom/issues/4) |

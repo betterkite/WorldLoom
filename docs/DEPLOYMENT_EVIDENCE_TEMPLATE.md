@@ -553,7 +553,7 @@ RPO/RTO。
 
 | 证据 | 当前结果 | 等级 | 复现命令 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | 125/125 通过（2026-09-24 本工作树复测；最终发布应以对应 commit 的 CI 为准） | `E1` | `pnpm test` |
+| 单元/集成测试 | 128/128 通过（2026-09-24 本工作树复测；最终发布应以对应 commit 的 CI 为准） | `E1` | `pnpm test` |
 | 类型、格式、lint、构建 | 通过 | `E1` | `pnpm typecheck`、`pnpm format:check`、`pnpm lint:strict`、`pnpm build` |
 | 严格部署 preflight | 7 pass、15 failure；provider 凭据/价格快照配置通过，但运行预算和生产发布事实仍阻断发布 | `E1` | `pnpm deployment:preflight -- --strict` |
 | Provider 价格证据新鲜度 | 90 天内 HTTPS 来源元数据、核对日、模型版本和计费基准格式通过；测试会拒绝过期/未来日期及无效 URL，但不联网核对价格内容 | `E1` | `pnpm exec vitest run tests/deployment-pricing-evidence.test.ts` |
@@ -568,7 +568,7 @@ RPO/RTO。
 | 依赖 SBOM | CycloneDX 1.5 生产依赖清单，包含 lockfile SHA-256 与源码 revision；CI artifact 需按发布记录归档 | `E1` | `pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json` |
 | 生产运行时镜像安全扫描（本地复测） | distroless Node 24 Debian 13，Trivy `os,library` 严格扫描 `CRITICAL,HIGH` 为 0；仅证明该构建与扫描时点 | `E1/E2` | `docker build ...`；Trivy JSON 报告与 SHA-256 归档 |
 | CI 证据关联索引 | 同一 commit 的 SBOM、不可变镜像 inspect、Trivy 漏洞结果、签名 provenance 和签名 SBOM attestation 校验结果已关联并生成 `EV-01` machine-readable index；注册表 digest、漏洞例外和独立复核仍需补充 | `E1 / CONDITIONAL` | GitHub Actions `evidence` job artifact；`node scripts/verify-build-evidence.mjs ... --vulnerability-report ... --provenance ... --sbom-provenance ...` |
-| Compose 安全绑定 | DB 仅绑定 `127.0.0.1:43133` | `E1/E2` | `docker compose config --quiet`、`docker compose ps` |
+| 本地 Compose 运行时硬化 | 2026-09-24 本机重建并重建 app/worker：两者均为 UID/GID `65532:65532`、healthy、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、PID 上限 256；app `/api/health` 返回 200，rootfs 写入得到 `EROFS`，Next cache/tmpfs 可写；worker 实际领取临时 `SemanticIndexJob`（attempts=1，安全终态 `no content`，provider 未调用），临时世界已删除；migrate 以非 root 直调 Prisma CLI，15 个迁移均已应用。新 app 镜像不含 `.env*`。app 4310 与 DB 43133 均只绑定 loopback，worker 无宿主机发布端口 | `E2 / 限定范围` | `docker compose --profile full config --quiet`、镜像构建/UID/文件清单检查、`/api/health`、`docker inspect`、`scripts/worker-replica-claim-smoke.mjs` stdin probe、`docker compose run --rm --no-deps migrate`；仅本机证据，不证明 Docker 主机、生产网关或目标平台的完整 CIS 基线 |
 | Full Compose 多副本拓扑 | CI run [35894596744](https://github.com/betterkite/WorldLoom/actions/runs/35894596744)，revision `00d591d97ba381b313faaa803622874a5581d339`：`db → migrate → app + worker × 2` 启动成功，两个 worker health 均通过；同一 run 的 DB 集成测试验证并发 executor 仅触发一次模型调用。此记录单独只证明 Compose 扩容和数据库 CAS，不证明生产 HA、全局并发预算或 SLO | `E2` | `docker compose --profile full up -d --build --scale worker=2`、`docker compose --profile full ps`、`pnpm test` 中 `allows only one concurrent executor to claim a durable run` |
 | Compose worker 副本独立领取探针 | CI run [35903165178](https://github.com/betterkite/WorldLoom/actions/runs/35903165178)，revision `ba35c1c36b615f2993514501fbbb1f75b3d53467`：两个不同 worker 容器 ID 依次单独运行；每个副本各自领取一条独立 queued `SemanticIndexJob`，均记录 `attempts=1`、`recoveryAttempts=0`、`indexed=0` 与开始/结束时间，然后因 CI 未配置 embedding 而进入已知安全终态。探针使用空 fixture，不调用 provider；临时世界清理。只证明该 Compose 配置中两副本都能分别领取并处理队列状态，不证明 provider 索引成功、并行吞吐、生产 HA、容量或 SLO | `E2 / 限定范围` | GitHub Actions `container` job：Full Compose runtime smoke test；`node scripts/worker-replica-claim-smoke.mjs`（由 CI 对每个 worker 副本分别隔离执行） |
 | 独立 Worker runtime smoke | 2026-09-23 UTC 本地 full Compose 复测：独立 worker 领取 queued `SemanticIndexJob`，`attempts=1`、`recoveryAttempts=0`，完成并持久化 1 个向量；实际走本地 `Xenova/bge-m3`，未配置远程 embedding 凭据；临时世界已清理 | `E2` | full Compose + 本地模型；`pnpm worker:smoke` |
