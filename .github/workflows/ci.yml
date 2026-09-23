@@ -330,7 +330,15 @@ jobs:
       - name: Full Compose runtime smoke test
         run: |
           set -eu
+          worker_ids=""
+          restore_workers() {
+            for worker_id in $worker_ids; do
+              running="$(docker inspect --format '{{.State.Running}}' "$worker_id" 2>/dev/null || true)"
+              if [ "$running" = false ]; then docker start "$worker_id" >/dev/null; fi
+            done
+          }
           cleanup() {
+            restore_workers
             docker compose --profile full down -v --remove-orphans
           }
           trap cleanup EXIT
@@ -358,6 +366,32 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:4310/api/health
+
+          app_id="$(docker compose --profile full ps -q app)"
+          worker_ids="$(docker compose --profile full ps -q worker)"
+          worker_1="$(printf '%s\n' "$worker_ids" | sed -n '1p')"
+          worker_2="$(printf '%s\n' "$worker_ids" | sed -n '2p')"
+          probe_path=/app/worker-replica-claim-smoke.mjs
+          docker cp scripts/worker-replica-claim-smoke.mjs "$app_id:$probe_path"
+          for selected_worker in "$worker_1" "$worker_2"; do
+            if [ "$selected_worker" = "$worker_1" ]; then other_worker="$worker_2"; else other_worker="$worker_1"; fi
+            docker stop "$other_worker" >/dev/null
+            selected_number="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.container-number"}}' "$selected_worker")"
+            selected_health=""
+            for health_attempt in $(seq 1 30); do
+              selected_health="$(docker inspect --format '{{.State.Health.Status}}' "$selected_worker" 2>/dev/null || true)"
+              if [ "$selected_health" = healthy ]; then break; fi
+              sleep 2
+            done
+            if [ "$selected_health" != healthy ]; then
+              echo "worker replica $selected_number is not healthy: $selected_health"
+              exit 1
+            fi
+            echo "Probing isolated worker replica $selected_number ($selected_worker)"
+            docker exec "$app_id" /nodejs/bin/node "$probe_path"
+            docker start "$other_worker" >/dev/null
+          done
+          restore_workers
           docker compose --profile full ps
 
   evidence:
