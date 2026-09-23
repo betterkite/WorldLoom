@@ -6,6 +6,7 @@ import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { graphQueryOptions } from '../api/queries';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { collapseGraphCommunities, findShortestGraphPath } from '@/lib/graph/view';
 import Link from 'next/link';
 
 /**
@@ -79,7 +80,8 @@ const KIND_META: Record<string, { label: string; color: string }> = {
   item: { label: '物品', color: '#ef4444' },
   concept: { label: '概念', color: '#8b5cf6' },
   rule: { label: '规则', color: '#84cc16' },
-  event: { label: '事件', color: '#f97316' }
+  event: { label: '事件', color: '#f97316' },
+  community: { label: '社区', color: '#0f766e' }
 };
 const KIND_FALLBACK = { label: '其它', color: '#94a3b8' };
 const kindMeta = (kind: string) => KIND_META[kind] ?? KIND_FALLBACK;
@@ -136,9 +138,13 @@ export function GraphTab({ worldId }: { worldId: string }) {
   const [asOfUid, setAsOfUid] = useState('');
   const [showRelated, setShowRelated] = useState(true);
   const [showIsolated, setShowIsolated] = useState(false);
+  const [kindFilter, setKindFilter] = useState('all');
+  const [collapseCommunities, setCollapseCommunities] = useState(false);
   const [layoutType, setLayoutType] = useState<LayoutTypes>('forceDirected2d');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [egoUid, setEgoUid] = useState<string | null>(null);
+  const [pathStartUid, setPathStartUid] = useState('');
+  const [pathTargetUid, setPathTargetUid] = useState('');
   const [canvasReady, setCanvasReady] = useState(false);
   const [webglPaintedKey, setWebglPaintedKey] = useState<string | null>(null);
   const graphViewportRef = useRef<HTMLDivElement>(null);
@@ -165,7 +171,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
       if (!response.ok) throw new Error('条目加载失败');
       return (await response.json()) as EntityDetail;
     },
-    enabled: Boolean(selectedUid) && view !== 'events'
+    enabled: Boolean(selectedUid) && !selectedUid?.startsWith('community:') && view !== 'events'
   });
 
   // 智能缺省视图（派生而非副作用）：新世界还没有关系事件时关系图为空，
@@ -177,7 +183,14 @@ export function GraphTab({ worldId }: { worldId: string }) {
 
   // ---------- 渲染模型 ----------
   const model = useMemo(() => {
-    type Node = { id: string; label: string; kind: string; degree: number };
+    type Node = {
+      id: string;
+      label: string;
+      kind: string;
+      degree: number;
+      community?: number;
+      members?: { id: string; label: string; kind: string }[];
+    };
     const nodes: Node[] = [];
     const edges: ViewEdge[] = [];
 
@@ -192,7 +205,8 @@ export function GraphTab({ worldId }: { worldId: string }) {
           id: node.uid,
           label: node.name,
           kind: node.kind,
-          degree: degree.get(node.uid) ?? 0
+          degree: degree.get(node.uid) ?? 0,
+          community: node.community
         });
       }
       overviewView.relationEdges.forEach((edge, index) => {
@@ -249,19 +263,37 @@ export function GraphTab({ worldId }: { worldId: string }) {
       }
     }
 
+    const filteredNodes =
+      kindFilter === 'all' ? nodes : nodes.filter((node) => node.kind === kindFilter);
+    let graphNodesForView = filteredNodes;
+    let graphEdgesForView = edges.filter(
+      (edge) =>
+        filteredNodes.some((node) => node.id === edge.source) &&
+        filteredNodes.some((node) => node.id === edge.target)
+    );
+
+    if (effectiveView === 'overview' && collapseCommunities) {
+      const collapsed = collapseGraphCommunities(filteredNodes, graphEdgesForView);
+      graphNodesForView = collapsed.nodes;
+      graphEdgesForView = collapsed.edges.map((edge) => ({
+        ...edge,
+        label: `${edge.label || '关联'}（聚类）`
+      }));
+    }
+
     const connected = new Set<string>();
-    for (const edge of edges) {
+    for (const edge of graphEdgesForView) {
       connected.add(edge.source);
       connected.add(edge.target);
     }
-    const isolated = nodes.filter((node) => !connected.has(node.id));
+    const isolated = graphNodesForView.filter((node) => !connected.has(node.id));
     // 当前视图一条边都没有时，孤立节点就是全部内容 —— 照常画出（否则画布全空）
-    const effectiveShowIsolated = showIsolated || edges.length === 0;
+    const effectiveShowIsolated = showIsolated || graphEdgesForView.length === 0;
     const visibleNodes = effectiveShowIsolated
-      ? nodes
-      : nodes.filter((node) => connected.has(node.id));
+      ? graphNodesForView
+      : graphNodesForView.filter((node) => connected.has(node.id));
     const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
-    let visibleEdges = edges.filter(
+    let visibleEdges = graphEdgesForView.filter(
       (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
     );
 
@@ -283,7 +315,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
       label: node.label,
       fill: kindMeta(node.kind).color,
       size: 6 + Math.min(node.degree, 8) * 1.2,
-      data: { kind: node.kind, degree: node.degree }
+      data: { kind: node.kind, degree: node.degree, community: node.community }
     }));
     const graphEdges: GraphEdge[] = visibleEdges.map((edge) => {
       const state = edge.stateAt ? EDGE_STATE_META[edge.stateAt] : null;
@@ -306,7 +338,43 @@ export function GraphTab({ worldId }: { worldId: string }) {
       isolated,
       hiddenIsolated: !effectiveShowIsolated
     };
-  }, [effectiveView, focus.data, overviewView, showRelated, showIsolated, egoUid]);
+  }, [
+    effectiveView,
+    focus.data,
+    overviewView,
+    showRelated,
+    showIsolated,
+    kindFilter,
+    collapseCommunities,
+    egoUid
+  ]);
+
+  const availableKinds = useMemo(() => {
+    const sourceNodes =
+      effectiveView === 'overview' ? overviewView.nodes : (focus.data?.nodes ?? []);
+    return [...new Set(sourceNodes.map((node) => node.kind))].toSorted();
+  }, [effectiveView, focus.data?.nodes, overviewView.nodes]);
+
+  const graphPath = useMemo(
+    () => findShortestGraphPath(model.nodes, model.edges, pathStartUid, pathTargetUid),
+    [model.edges, model.nodes, pathStartUid, pathTargetUid]
+  );
+  const pathNodeIds = useMemo(() => new Set(graphPath?.nodes ?? []), [graphPath]);
+  const pathEdgeIds = useMemo(() => new Set(graphPath?.edges ?? []), [graphPath]);
+  const renderedGraphNodes = useMemo(() => {
+    if (!graphPath) return model.graphNodes;
+    return model.graphNodes.map((node) => ({
+      ...node,
+      fill: pathNodeIds.has(node.id) ? '#0f766e' : '#cbd5e1',
+      size: pathNodeIds.has(node.id) ? (node.size ?? 6) + 2 : node.size
+    }));
+  }, [graphPath, model.graphNodes, pathNodeIds]);
+  const renderedGraphEdges = useMemo(() => {
+    if (!graphPath) return model.graphEdges;
+    return model.graphEdges.map((edge) =>
+      pathEdgeIds.has(edge.id) ? { ...edge, fill: '#0f766e', dashed: false } : edge
+    );
+  }, [graphPath, model.graphEdges, pathEdgeIds]);
 
   // Reagraph creates its R3F camera controls in a separate commit. Mounting the
   // canvas on the same commit as async graph data can leave its internal
@@ -316,16 +384,16 @@ export function GraphTab({ worldId }: { worldId: string }) {
   useEffect(() => {
     const frame = requestAnimationFrame(() => setCanvasReady(true));
     return () => cancelAnimationFrame(frame);
-  }, [effectiveView, layoutType, model.graphNodes.length, model.graphEdges.length]);
+  }, [effectiveView, layoutType, renderedGraphNodes.length, renderedGraphEdges.length]);
 
-  const graphRenderKey = `${effectiveView}:${layoutType}:${model.graphNodes.map((node) => node.id).join(',')}`;
+  const graphRenderKey = `${effectiveView}:${layoutType}:${renderedGraphNodes.map((node) => node.id).join(',')}`;
 
   const fallbackGraph = useMemo(() => {
     const center = { x: 500, y: 280 };
-    const count = model.graphNodes.length;
+    const count = renderedGraphNodes.length;
     const radius = count <= 1 ? 0 : Math.min(220, Math.max(130, count * 42));
     const points = new Map<string, FallbackPoint>();
-    model.graphNodes.forEach((node, index) => {
+    renderedGraphNodes.forEach((node, index) => {
       const angle = count <= 1 ? 0 : (index / count) * Math.PI * 2 - Math.PI / 2;
       points.set(node.id, {
         x: center.x + Math.cos(angle) * radius,
@@ -334,13 +402,13 @@ export function GraphTab({ worldId }: { worldId: string }) {
     });
     return {
       points,
-      edges: model.graphEdges.flatMap((edge) => {
+      edges: renderedGraphEdges.flatMap((edge) => {
         const source = points.get(edge.source);
         const target = points.get(edge.target);
         return source && target ? [{ edge, source, target }] : [];
       })
     };
-  }, [model.graphEdges, model.graphNodes]);
+  }, [renderedGraphEdges, renderedGraphNodes]);
 
   useEffect(() => {
     if (!canvasReady) return;
@@ -387,7 +455,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
     (edge) => edge.source === selectedUid || edge.target === selectedUid
   );
   const nameOf = (uid: string) => model.nodes.find((node) => node.id === uid)?.label ?? uid;
-  const presentKinds = [...new Set(model.nodes.map((node) => node.kind))];
+  const presentKinds = availableKinds;
   const slicing = effectiveView === 'relations' && Boolean(focus.data?.asOf);
 
   const switchView = (next: GraphView) => {
@@ -426,6 +494,42 @@ export function GraphTab({ worldId }: { worldId: string }) {
               ))}
             </select>
           </label>
+          <label className='flex items-center gap-1 text-xs text-muted-foreground'>
+            类型
+            <select
+              aria-label='节点类型筛选'
+              className='h-7 rounded-md border bg-background px-2 text-xs'
+              value={kindFilter}
+              onChange={(event) => {
+                setKindFilter(event.target.value);
+                setSelectedUid(null);
+                setPathStartUid('');
+                setPathTargetUid('');
+              }}
+            >
+              <option value='all'>全部</option>
+              {availableKinds.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kindMeta(kind).label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {effectiveView === 'overview' && (
+            <label className='flex items-center gap-1 text-xs text-muted-foreground'>
+              <input
+                type='checkbox'
+                checked={collapseCommunities}
+                onChange={(event) => {
+                  setCollapseCommunities(event.target.checked);
+                  setSelectedUid(null);
+                  setPathStartUid('');
+                  setPathTargetUid('');
+                }}
+              />
+              折叠社区
+            </label>
+          )}
           {effectiveView === 'relations' && (
             <label className='flex items-center gap-1 text-xs text-muted-foreground'>
               时间切片
@@ -465,6 +569,59 @@ export function GraphTab({ worldId }: { worldId: string }) {
             <Button size='sm' variant='outline' onClick={() => setEgoUid(null)}>
               返回全图
             </Button>
+          )}
+        </div>
+
+        <div className='flex flex-wrap items-center gap-2 rounded-md border bg-muted/20 p-2 text-xs'>
+          <span className='font-medium'>路径查找</span>
+          <select
+            aria-label='路径起点'
+            className='h-7 min-w-36 rounded-md border bg-background px-2'
+            value={pathStartUid}
+            onChange={(event) => setPathStartUid(event.target.value)}
+          >
+            <option value=''>选择起点</option>
+            {model.nodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label}
+              </option>
+            ))}
+          </select>
+          <span className='text-muted-foreground'>→</span>
+          <select
+            aria-label='路径终点'
+            className='h-7 min-w-36 rounded-md border bg-background px-2'
+            value={pathTargetUid}
+            onChange={(event) => setPathTargetUid(event.target.value)}
+          >
+            <option value=''>选择终点</option>
+            {model.nodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label}
+              </option>
+            ))}
+          </select>
+          {(pathStartUid || pathTargetUid) && (
+            <Button
+              size='sm'
+              variant='ghost'
+              onClick={() => {
+                setPathStartUid('');
+                setPathTargetUid('');
+              }}
+            >
+              清除
+            </Button>
+          )}
+          {graphPath ? (
+            <span className='text-emerald-700 dark:text-emerald-400'>
+              已找到 {graphPath.nodes.length - 1} 跳路径：
+              {graphPath.nodes.map((uid) => nameOf(uid)).join(' → ')}
+            </span>
+          ) : pathStartUid && pathTargetUid ? (
+            <span className='text-muted-foreground'>当前筛选范围内没有连通路径。</span>
+          ) : (
+            <span className='text-muted-foreground'>在当前视图和筛选范围内查找最短路径。</span>
           )}
         </div>
 
@@ -536,8 +693,8 @@ export function GraphTab({ worldId }: { worldId: string }) {
             <GraphCanvas
               // preserveDrawingBuffer 让验收脚本能读取像素，验证图确实铺满画布
               glOptions={{ preserveDrawingBuffer: true }}
-              nodes={model.graphNodes}
-              edges={model.graphEdges}
+              nodes={renderedGraphNodes}
+              edges={renderedGraphEdges}
               layoutType={layoutType}
               labelType='auto'
               edgeInterpolation='curved'
@@ -592,7 +749,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
                       />
                     ))}
                   </g>
-                  {model.graphNodes.map((node) => {
+                  {renderedGraphNodes.map((node) => {
                     const point = fallbackGraph.points.get(node.id);
                     if (!point) return null;
                     const selected = node.id === selectedUid;
@@ -765,6 +922,27 @@ export function GraphTab({ worldId }: { worldId: string }) {
               </>
             )}
 
+            {selectedNode.kind === 'community' && (
+              <div className='space-y-2 rounded-md bg-muted/40 p-2 text-xs'>
+                <p className='font-medium'>社区成员（{selectedNode.members?.length ?? 0}）</p>
+                <div className='flex max-h-40 flex-wrap gap-1 overflow-y-auto'>
+                  {(selectedNode.members ?? []).map((member) => (
+                    <button
+                      key={member.id}
+                      type='button'
+                      className='rounded-md border px-2 py-1 hover:border-primary/40'
+                      onClick={() => {
+                        setCollapseCommunities(false);
+                        setSelectedUid(member.id);
+                      }}
+                    >
+                      {member.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className='space-y-1'>
               <p className='text-xs font-medium'>关系（{selectedEdges.length}）</p>
               {selectedEdges.length === 0 && (
@@ -817,7 +995,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
               <Button size='sm' variant='outline' onClick={() => setEgoUid(selectedNode.id)}>
                 只看它的邻居
               </Button>
-              {selectedNode.kind !== 'event' && (
+              {selectedNode.kind !== 'event' && selectedNode.kind !== 'community' && (
                 <Link
                   href={`/dashboard/worlds/${worldId}/entities/${selectedNode.id}`}
                   className='inline-flex h-8 items-center rounded-md border px-3 text-xs hover:border-primary/40'

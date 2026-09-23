@@ -178,6 +178,61 @@ async function main() {
   await page.goto(`${BASE}/dashboard/worlds/${W}/graph`);
   await page.waitForTimeout(2600);
   const nodeCountBefore = (await page.locator('canvas').count());
+  const graphTypeFilter = page.getByRole('combobox', { name: '节点类型筛选' });
+  const pathStart = page.getByRole('combobox', { name: '路径起点' });
+  const pathTarget = page.getByRole('combobox', { name: '路径终点' });
+  const hasExplorationControls =
+    (await graphTypeFilter.count()) === 1 &&
+    (await pathStart.count()) === 1 &&
+    (await pathTarget.count()) === 1;
+  record(
+    '图谱交互',
+    hasExplorationControls ? 'OK' : 'FAIL',
+    '图谱进阶控件',
+    `类型筛选=${await graphTypeFilter.count()} 路径控件=${await pathStart.count()}/${await pathTarget.count()}`,
+    true
+  );
+  const pathOptions = await pathStart.locator('option').evaluateAll((options) =>
+    options.map((option) => option.value).filter(Boolean)
+  );
+  if (pathOptions.length >= 2) {
+    await pathStart.selectOption(pathOptions[0]);
+    await pathTarget.selectOption(pathOptions[1]);
+    await page.waitForTimeout(500);
+    const pathText = await page.locator('text=/已找到|没有连通路径/').first().innerText().catch(() => '');
+    record(
+      '图谱交互',
+      /已找到|没有连通路径/.test(pathText) ? 'OK' : 'FAIL',
+      '路径查找',
+      pathText || '选择两个节点后没有显示路径结果',
+      true
+    );
+    await page.getByRole('button', { name: '清除' }).click();
+  } else {
+    record('图谱交互', 'WARN', '路径查找', `可选节点不足（${pathOptions.length}）`);
+  }
+  const overviewButton = page.getByRole('button', { name: '总览', exact: true });
+  if (await overviewButton.count()) {
+    await overviewButton.click();
+    await page.waitForTimeout(1200);
+    const collapseToggle = page.getByLabel('折叠社区');
+    record(
+      '图谱交互',
+      (await collapseToggle.count()) === 1 ? 'OK' : 'FAIL',
+      '社区折叠',
+      `折叠控件=${await collapseToggle.count()}`,
+      true
+    );
+    if (await collapseToggle.count()) {
+      await collapseToggle.check();
+      await page.waitForTimeout(600);
+      const collapsedText = await page.locator('text=/社区 \\d+ · \\d+ 项/').count();
+      record('图谱交互', collapsedText > 0 ? 'OK' : 'WARN', '社区折叠', `聚类节点文案=${collapsedText}`, true);
+    }
+  }
+
+  await page.goto(`${BASE}/dashboard/worlds/${W}/graph`);
+  await page.waitForTimeout(2600);
   // 交互 A：点关系清单一行 → 右侧节点详情侧边栏 → 只看邻居 → 返回全图
   const relationRow = page.locator('button').filter({ hasText: /师徒|盟友|member_of|rival|敌人|联姻/ }).first();
   if (await relationRow.count()) {

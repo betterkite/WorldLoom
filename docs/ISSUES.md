@@ -9,7 +9,10 @@
 | ISS-32 | P1 | 正式 provider 的价格与预算值需要按部署合同填写 | 严格 preflight 通过，未知价格不被伪造 | 待完成 | [#3](https://github.com/betterkite/WorldLoom/issues/3) |
 | ISS-33 | P2 | 真实创作质量仍需持续观察 | 连续真实素材试用形成质量、耗时、成本和阻塞记录 | 暂缓 | [#4](https://github.com/betterkite/WorldLoom/issues/4) |
 | ISS-34 | P2 | 大规模检索需要按目标硬件复测 | 目标数据量下 P95、内存和索引刷新满足部署门槛 | 按需 | [#5](https://github.com/betterkite/WorldLoom/issues/5) |
-| ISS-35 | P2 | 图谱高级交互尚未启用 | 路径查找、聚类折叠和类型筛选有明确 UX 与回归测试 | 按需 | [#6](https://github.com/betterkite/WorldLoom/issues/6) |
+| ISS-35 | P2 | 图谱高级交互尚未启用 | 路径查找、聚类折叠和类型筛选有明确 UX 与回归测试 | 已完成（649803ca） | [#6](https://github.com/betterkite/WorldLoom/issues/6) |
 
 新增问题应写明复现条件、影响范围、验收条件和优先级；不要把凭据、用户素材或 provider
 原始响应写入 issue 或仓库。
+
+ISS-35 已在 `649803ca` 完成：图谱支持当前筛选范围内的最短路径、总览社区折叠和节点类型筛选；
+纯逻辑测试 3 项通过，生产浏览器验收 41 项通过（FAIL 0、WARN 0）。
