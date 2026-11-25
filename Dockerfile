@@ -1,12 +1,10 @@
 # WorldLoom 生产镜像：Next.js standalone 输出 + pnpm
-# Debian 13 keeps the production base on a maintained security line. The
-# runtime stage removes package managers so their unrelated dependency tree is
-# not shipped into the application image.
+# Build and dependency installation use the pinned Debian toolchain.
 FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable
 # Prisma's native query engine needs the system OpenSSL libraries at install,
-# build and runtime. Keep the same crypto/runtime baseline in every stage.
+# build. The final Ubuntu images supply the OpenSSL 3 ABI separately.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates openssl \
   && rm -rf /var/lib/apt/lists/*
@@ -18,34 +16,28 @@ WORKDIR /migration
 COPY docker/migrate/package.json docker/migrate/pnpm-lock.yaml docker/migrate/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
-# It contains the Prisma CLI and schema, but never includes application secrets.
-FROM base AS migrate-rootfs
+# The Ubuntu 24.04 chiseled root contains glibc, OpenSSL, CA roots and the
+# package inventory and copyrights for those files. Both roles use the same
+# upstream Node executable and its complete license from the pinned toolchain.
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled@sha256:2bb1d484500b032aaafb75e876ffbea135b969d6259cacfcbf18a793e5d6e6ec AS runtime-base
+COPY --from=base /usr/local/bin/node /nodejs/bin/node
+COPY --from=base /usr/local/LICENSE /nodejs/LICENSE
+ENV PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+USER 65532:65532
 WORKDIR /app
-# Migration runs the locked Prisma CLI directly through Node. Package managers
-# are build-time tools; omit their separate dependency trees from this target.
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-  /opt/yarn-v1.22.22 \
-  /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
-  /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
-  /usr/local/bin/docker-entrypoint.sh
+
+FROM runtime-base AS migrate
 COPY --from=migrate-deps /migration/node_modules ./node_modules
 COPY docker/migrate/package.json ./package.json
 COPY prisma ./prisma
 COPY LICENSE ./LICENSE
-# Export the cleaned filesystem into a fresh image. A deletion-only layer would
-# still distribute the package managers in inherited lower layers.
-FROM scratch AS migrate
-COPY --from=migrate-rootfs / /
-WORKDIR /app
 ARG VCS_REF=unknown
 ARG VERSION=unknown
 LABEL org.opencontainers.image.title="WorldLoom Migration" \
   org.opencontainers.image.source="https://github.com/betterkite/WorldLoom" \
   org.opencontainers.image.revision="${VCS_REF}" \
   org.opencontainers.image.version="${VERSION}"
-ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV NODE_ENV=production
-USER node
 CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
 
 FROM base AS deps
@@ -128,11 +120,7 @@ COPY scripts/verify-image-payload.mjs /tmp/verify-image-payload.mjs
 COPY scripts/font-assets-audit.mjs /tmp/font-assets-audit.mjs
 RUN node /tmp/verify-image-payload.mjs /app
 
-# Distroless keeps only the glibc/CA/Node runtime needed by the standalone
-# application. Pin the release digest so the production base is reproducible;
-# the weekly image refresh should update this digest after a fresh scan.
-FROM gcr.io/distroless/nodejs24-debian13@sha256:b1fc33242cc74151f50c62b4a03d48afd759dccf81279b5f8e401db4546479c1 AS runtime
-WORKDIR /app
+FROM runtime-base AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4310 HOSTNAME=0.0.0.0
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -148,5 +136,5 @@ USER 65532:65532
 EXPOSE 4310
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
   CMD ["/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:4310/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-# The distroless base already provides /nodejs/bin/node as ENTRYPOINT.
+ENTRYPOINT ["/nodejs/bin/node"]
 CMD ["server.js"]

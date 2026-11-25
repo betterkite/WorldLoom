@@ -19,9 +19,9 @@ for (const command of ['npm', 'npx', 'corepack', 'pnpm', 'pnpx', 'yarn', 'yarnpk
 if (present('/usr/local/lib/node_modules')) {
   assert.deepEqual(readdirSync('/usr/local/lib/node_modules'), [], 'unexpected global Node packages');
 }
-assert(!readdirSync('/opt').some((name) => /^yarn(?:-|$)/.test(name)), 'unexpected Yarn distribution');
+assert(!present('/opt') || !readdirSync('/opt').some((name) => /^yarn(?:-|$)/.test(name)), 'unexpected Yarn distribution');
 assert(present('/app/node_modules/prisma/build/index.js'), 'Prisma migration entrypoint is missing');
-assert(present('/usr/local/LICENSE'), 'Node license is missing');
+assert(present('/nodejs/LICENSE'), 'Node license is missing');
 const prisma = JSON.parse(readFileSync('/app/node_modules/prisma/package.json', 'utf8'));
 assert.equal(prisma.version, '6.19.3', 'migration Prisma version changed; review the locked runtime');
 console.log(JSON.stringify({ node: process.version, prisma: prisma.version, uid: process.getuid(), packageManagers: [] }));

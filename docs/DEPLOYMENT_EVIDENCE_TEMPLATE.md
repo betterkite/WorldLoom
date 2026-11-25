@@ -225,7 +225,7 @@ WorldLoom 当前是本地/受控主机应用，不自带多租户认证授权。
 | WorldLoom commit SHA | `待填写，40 位完整 SHA` |
 | GitHub Actions run / 构建链接 | `待填写` |
 | 容器镜像 digest | `待填写，禁止只写 mutable tag` |
-| 运行时基础镜像 / digest | `gcr.io/distroless/nodejs24-debian13@sha256:...`，按实际构建记录填写 |
+| 应用与迁移基础镜像 / digest | `mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled@sha256:...`，按实际构建记录填写 |
 | 构建基础镜像 / digest | `node:24-trixie-slim@sha256:...`，按实际构建记录填写 |
 | Prisma migration 版本 | `待填写` |
 | SBOM / 依赖审计报告 | `待填写，链接或报告哈希` |

@@ -5,6 +5,17 @@ not a legal opinion or a release approval. Image inspections were read-only agai
 and Linux/x64 OCI images on 2026-09-24 and 2026-09-27. Package counts describe files in the image, not every
 dependency bundled into JavaScript or native binaries.
 
+## Current operating-system packages
+
+The November 25 runtime and migration images share Microsoft's Ubuntu 24.04
+chiseled runtime-deps base. Its package status inventory lists eight Ubuntu
+packages. Both ARM64 images passed the package copyright audit for all eight
+and the separate Node 24.21.0 license check. The Node executable and upstream
+license come from the digest-pinned build image. The application and migration
+images each receive a separate OS and library vulnerability scan. Earlier
+Debian counts below refer to the dated images that were examined.
+[Upstream runtime-deps Dockerfile](https://github.com/dotnet/dotnet-docker/tree/main/src/runtime-deps/10.0/noble-chiseled)
+
 The standalone restoration step also preserves the original `versions.json` for each traced
 `@img/sharp-libvips-*` package. Next's trace can omit that file while retaining the native library.
 Before writing any files, restoration checks the declaration's shape, exact package metadata and

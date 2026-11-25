@@ -56,7 +56,9 @@ describe('production compose migration gate', () => {
 
   it('runs the application image as a non-root user', () => {
     expect(dockerfile).toContain('USER 65532:65532');
-    expect(dockerfile).toContain('USER node');
+    expect(dockerfile).toContain('FROM runtime-base AS migrate');
+    expect(dockerfile).toContain('FROM runtime-base AS runtime');
+    expect(dockerfile).toMatch(/USER 65532:65532[\s\S]*FROM runtime-base AS migrate/);
   });
 
   it('excludes dotenv files from Docker build contexts', () => {

@@ -5,8 +5,8 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'n
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Node is installed from its upstream release, not as a Debian package, in
-// both pinned bases. Review this binding together with a base-image update.
+// Both images carry the upstream Node executable and license from the pinned
+// build toolchain. Review this binding when upgrading Node.
 const NODE_RELEASE = {
   version: '24.21.0',
   licenseSha256: '5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace',

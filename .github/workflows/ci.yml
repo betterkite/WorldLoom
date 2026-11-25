@@ -305,7 +305,7 @@ jobs:
       - name: Prepare security evidence directory
         run: mkdir -p artifacts
 
-      - name: Audit Debian and Node base-image copyright payloads
+      - name: Audit OS package and Node copyright payloads
         run: |
           docker run --rm --network none --read-only \
             --volume "$PWD/scripts/base-image-copyright-audit.mjs:/tmp/base-image-copyright-audit.mjs:ro" \
@@ -362,12 +362,27 @@ jobs:
           version: v0.74.0
           exit-code: '1'
 
+      - name: Scan migration image for vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: worldloom-migrate:ci
+          format: json
+          output: artifacts/worldloom-migrate-trivy.json
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          version: v0.74.0
+          exit-code: '1'
+
       - name: Upload vulnerability scan evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: worldloom-vulnerability-scan-${{ github.sha }}
-          path: artifacts/worldloom-trivy.json
+          path: |
+            artifacts/worldloom-trivy.json
+            artifacts/worldloom-migrate-trivy.json
           if-no-files-found: error
           retention-days: 30
 
@@ -627,6 +642,7 @@ jobs:
             --sbom evidence/sbom/worldloom-migrate-sbom.cdx.json \
             --image evidence/image/worldloom-migrate-image-inspect.json \
             --runtime-inventory evidence/runtime/worldloom-migrate-runtime-licenses.json \
+            --vulnerability-report evidence/vulnerability/worldloom-migrate-trivy.json \
             --output evidence/migration-index.json
 
       - name: Upload correlated evidence index
