@@ -1,0 +1,9 @@
+allowBuilds:
+  '@prisma/engines': true
+  prisma: true
+onlyBuiltDependencies:
+  - '@prisma/engines'
+  - prisma
+overrides:
+  deepmerge-ts: 8.0.0
+  effect@3.21.0: 3.22.1

@@ -11,10 +11,11 @@ export async function GET(request: NextRequest, { params }: Params) {
     const url = new URL(request.url);
     const view = url.searchParams.get('view');
     const asOf = url.searchParams.get('asOf');
+    const version = url.searchParams.get('version');
     if (view === 'relations' || view === 'events') {
-      return NextResponse.json(await getFocusGraph(worldId, view, { asOf }));
+      return NextResponse.json(await getFocusGraph(worldId, view, { asOf, version }));
     }
-    return NextResponse.json(await getWorldGraph(worldId));
+    return NextResponse.json(await getWorldGraph(worldId, { version }));
   } catch (error) {
     return errorResponse(error);
   }

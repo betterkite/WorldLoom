@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
   fetchChanges,
+  fetchDetailedChanges,
   fetchLintFindings,
   fetchRelationsAt,
   fetchTimeline,
@@ -18,6 +19,7 @@ export const worldKeys = {
   all: ['worlds'] as const,
   list: () => [...worldKeys.all, 'list'] as const,
   detail: (worldId: string) => [...worldKeys.all, 'detail', worldId] as const,
+  scope: (worldId: string) => [...worldKeys.all, worldId] as const,
   entities: (worldId: string) => [...worldKeys.all, worldId, 'entities'] as const,
   events: (worldId: string) => [...worldKeys.all, worldId, 'events'] as const,
   epochs: (worldId: string) => [...worldKeys.all, worldId, 'epochs'] as const,
@@ -47,25 +49,42 @@ export const epochsQueryOptions = (worldId: string) =>
 export const changesQueryOptions = (worldId: string) =>
   queryOptions({ queryKey: worldKeys.changes(worldId), queryFn: () => fetchChanges(worldId) });
 
+export const detailedChangesQueryOptions = (worldId: string, status: 'pending' | 'merged') =>
+  queryOptions({
+    queryKey: [...worldKeys.changes(worldId), 'detailed', status],
+    queryFn: () => fetchDetailedChanges(worldId, status)
+  });
+
 export const sourcesQueryOptions = (worldId: string) =>
   queryOptions({ queryKey: worldKeys.sources(worldId), queryFn: () => fetchSources(worldId) });
 
 export const versionsQueryOptions = (worldId: string) =>
   queryOptions({ queryKey: worldKeys.versions(worldId), queryFn: () => fetchVersions(worldId) });
 
-export const timelineQueryOptions = (worldId: string, participant?: string | null) =>
+export const timelineQueryOptions = (
+  worldId: string,
+  participant?: string | null,
+  version?: number
+) =>
   queryOptions({
-    queryKey: [...worldKeys.timeline(worldId), participant ?? 'all'],
-    queryFn: () => fetchTimeline(worldId, participant)
+    queryKey: [...worldKeys.timeline(worldId), participant ?? 'all', version ?? 'master'],
+    queryFn: () => fetchTimeline(worldId, participant, version)
   });
 
-export const relationsAtQueryOptions = (worldId: string, atEvent?: string | null) =>
+export const relationsAtQueryOptions = (
+  worldId: string,
+  atEvent?: string | null,
+  version?: number
+) =>
   queryOptions({
-    queryKey: [...worldKeys.all, worldId, 'relations', atEvent ?? 'current'],
-    queryFn: () => fetchRelationsAt(worldId, atEvent)
+    queryKey: [...worldKeys.all, worldId, 'relations', atEvent ?? 'current', version ?? 'master'],
+    queryFn: () => fetchRelationsAt(worldId, atEvent, version)
   });
 
 export const lintQueryOptions = (worldId: string) =>
   queryOptions({ queryKey: worldKeys.lint(worldId), queryFn: () => fetchLintFindings(worldId) });
-export const graphQueryOptions = (worldId: string) =>
-  queryOptions({ queryKey: worldKeys.graph(worldId), queryFn: () => fetchGraph(worldId) });
+export const graphQueryOptions = (worldId: string, version?: number) =>
+  queryOptions({
+    queryKey: [...worldKeys.graph(worldId), version ?? 'master'],
+    queryFn: () => fetchGraph(worldId, version)
+  });

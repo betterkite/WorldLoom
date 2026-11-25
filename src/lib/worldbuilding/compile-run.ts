@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { CompileChunkStatus, CompileRunStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import { newUid } from '@/lib/uid';
-import { GovernanceError, requireWorld } from '@/lib/governance/changes';
+import { GovernanceError } from '@/lib/governance/changes';
 import { chat as defaultChat } from '@/lib/llm/client';
 import { getProfileLimits, getProfilePricing } from '@/lib/llm/config';
 import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
+import { getExecutionLimiter } from '@/lib/worker/execution';
 import {
   analyzeCompileChunkWithMeta,
   COMPILE_PROMPT_VERSION,
@@ -13,6 +14,7 @@ import {
   mergeAnalyses,
   mergeGeneratedWorlds,
   splitForCompile,
+  getCompileChunkLimit,
   type ChatFn,
   type CompileContext
 } from './genesis';
@@ -27,7 +29,6 @@ export type CompileRunInput = {
   chapterId?: string;
   sourceFilename: string;
   sourceContent: string;
-  context: PersistedCompileContext;
 };
 
 function provenanceKey(value: string): string {
@@ -122,90 +123,179 @@ type CompileRunWithChunks = Prisma.CompileRunGetPayload<{
 export const COMPILE_RUN_HEARTBEAT_INTERVAL_MS = 5_000;
 export const COMPILE_RUN_STALE_AFTER_MS = 120_000;
 
-async function heartbeatCompileRun(runId: string) {
+async function heartbeatCompileRun(runId: string, attempt: number) {
   await prisma.compileRun.updateMany({
-    where: { id: runId, status: CompileRunStatus.running },
+    where: { id: runId, status: CompileRunStatus.running, attempts: attempt },
     data: { lastHeartbeatAt: new Date() }
   });
 }
 
-function startCompileHeartbeat(runId: string) {
+function startCompileHeartbeat(runId: string, attempt: number) {
   const timer = setInterval(() => {
-    void heartbeatCompileRun(runId).catch(() => {
+    void heartbeatCompileRun(runId, attempt).catch(() => {
       // A later beat or the runner's DB operation will surface a real failure.
     });
   }, COMPILE_RUN_HEARTBEAT_INTERVAL_MS);
-  void heartbeatCompileRun(runId).catch(() => undefined);
+  void heartbeatCompileRun(runId, attempt).catch(() => undefined);
   return () => clearInterval(timer);
 }
 
+async function readCompileCatalog(tx: Prisma.TransactionClient, worldId: string, version: number) {
+  const [epochs, entities, events] = await Promise.all([
+    tx.epoch.findMany({
+      where: { worldId, version },
+      select: { uid: true, name: true },
+      orderBy: { uid: 'asc' }
+    }),
+    tx.entity.findMany({
+      where: { worldId, version },
+      select: { uid: true, name: true, kind: true },
+      orderBy: { uid: 'asc' }
+    }),
+    tx.chronicleEvent.findMany({
+      where: { worldId, version },
+      select: { uid: true, title: true },
+      orderBy: { uid: 'asc' }
+    })
+  ]);
+  return { epochs, entities, events };
+}
+
+/** Old catalog queries had no ordering. Compare their facts, never relabel them. */
+function compileCatalogKey(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const catalog = value as Record<string, unknown>;
+  const normalized: string[][][] = [];
+  for (const [name, fields] of [
+    ['epochs', ['uid', 'name']],
+    ['entities', ['uid', 'name', 'kind']],
+    ['events', ['uid', 'title']]
+  ] as const) {
+    const rows = catalog[name];
+    if (!Array.isArray(rows)) return null;
+    const values: string[][] = [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || fields.some((field) => typeof row[field] !== 'string'))
+        return null;
+      values.push(fields.map((field) => row[field] as string));
+    }
+    normalized.push(values.toSorted((a, b) => a[0].localeCompare(b[0])));
+  }
+  return JSON.stringify(normalized);
+}
+
+function contextMatches(value: unknown, expected: PersistedCompileContext): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const saved = value as PersistedCompileContext;
+  return (
+    saved.worldName === expected.worldName &&
+    saved.premise === expected.premise &&
+    saved.style === expected.style &&
+    saved.sourceFilename === expected.sourceFilename &&
+    compileCatalogKey(saved.catalog) === compileCatalogKey(expected.catalog)
+  );
+}
+
 export async function createCompileRun(worldId: string, input: CompileRunInput) {
-  const world = await requireWorld(worldId);
   const sourceHash = createHash('sha256').update(input.sourceContent).digest('hex');
-  const chunks = splitForCompile(input.sourceContent);
-  const source = input.sourceId
-    ? await prisma.source.findFirst({ where: { id: input.sourceId, worldId } })
-    : await prisma.source.upsert({
-        where: { worldId_contentHash: { worldId, contentHash: sourceHash } },
-        update: {},
-        create: {
+  const chunks = splitForCompile(input.sourceContent, getCompileChunkLimit());
+  return prisma.$transaction(
+    async (tx) => {
+      // Share merge's world lock order. Only short DB work belongs here, never a
+      // model call. Serial creation also makes active-run lookup/create coherent.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${worldId}))`;
+      await tx.$queryRaw`SELECT id FROM worlds WHERE id = ${worldId} FOR SHARE`;
+      const world = await tx.world.findUnique({ where: { id: worldId } });
+      if (!world) throw new GovernanceError('world_not_found', 'World not found');
+      const context: PersistedCompileContext = {
+        worldName: world.name,
+        premise: world.premise,
+        style: world.style,
+        catalog: await readCompileCatalog(tx, worldId, world.masterVersion),
+        sourceFilename: input.sourceFilename
+      };
+      const source = input.sourceId
+        ? await tx.source.findFirst({ where: { id: input.sourceId, worldId } })
+        : await tx.source.upsert({
+            where: { worldId_contentHash: { worldId, contentHash: sourceHash } },
+            update: {},
+            create: {
+              worldId,
+              uid: newUid('src'),
+              filename: input.sourceFilename.slice(0, 200),
+              mediaType: 'text/markdown',
+              content: input.sourceContent,
+              contentHash: sourceHash,
+              sizeBytes: Buffer.byteLength(input.sourceContent, 'utf8'),
+              author: input.kind === 'chapter' ? 'chapter-compiler' : 'compile-run'
+            }
+          });
+      if (!source) throw new GovernanceError('source_not_found', 'Compile source not found');
+      const sourceId = source.id;
+      const existing = await tx.compileRun.findFirst({
+        where: {
           worldId,
-          uid: newUid('src'),
-          filename: input.sourceFilename.slice(0, 200),
-          mediaType: 'text/markdown',
-          content: input.sourceContent,
-          contentHash: sourceHash,
-          sizeBytes: Buffer.byteLength(input.sourceContent, 'utf8'),
-          author: input.kind === 'chapter' ? 'chapter-compiler' : 'compile-run'
-        }
+          kind: input.kind,
+          sourceHash,
+          baseVersion: world.masterVersion,
+          status: { in: [CompileRunStatus.queued, CompileRunStatus.running] },
+          sourceId,
+          chapterId: input.chapterId ?? null
+        },
+        include: { chunks: { orderBy: { index: 'asc' } } },
+        orderBy: { createdAt: 'desc' }
       });
-  if (!source) throw new GovernanceError('source_not_found', 'Compile source not found');
-  const sourceId = source.id;
-
-  const existing = await prisma.compileRun.findFirst({
-    where: {
-      worldId,
-      kind: input.kind,
-      sourceHash,
-      baseVersion: world.masterVersion,
-      status: { in: [CompileRunStatus.queued, CompileRunStatus.running] },
-      sourceId,
-      ...(input.chapterId ? { chapterId: input.chapterId } : {})
+      // An older queued run may carry the original race. Keep its history, but
+      // don't reuse it unless its actual saved context matches this snapshot.
+      if (existing && contextMatches(existing.context, context))
+        return { run: existing, reused: true };
+      const run = await tx.compileRun.create({
+        data: {
+          worldId,
+          kind: input.kind,
+          sourceId,
+          chapterId: input.chapterId ?? null,
+          sourceHash,
+          sourceFilename: input.sourceFilename,
+          context: context as Prisma.InputJsonValue,
+          baseVersion: world.masterVersion,
+          totalChunks: chunks.length,
+          chunks: {
+            create: chunks.map((content, index) => {
+              const sourceStart = chunks
+                .slice(0, index)
+                .reduce((offset, previous) => offset + previous.length, 0);
+              return {
+                index,
+                sourceStart,
+                sourceEnd: sourceStart + content.length,
+                content,
+                contentHash: createHash('sha256').update(content).digest('hex')
+              };
+            })
+          }
+        },
+        include: { chunks: { orderBy: { index: 'asc' } } }
+      });
+      return { run, reused: false };
     },
-    include: { chunks: { orderBy: { index: 'asc' } } },
-    orderBy: { createdAt: 'desc' }
-  });
-  if (existing) return { run: existing, reused: true };
+    { maxWait: 10_000, timeout: 30_000 }
+  );
+}
 
-  const run = await prisma.compileRun.create({
-    data: {
-      worldId,
-      kind: input.kind,
-      sourceId,
-      chapterId: input.chapterId ?? null,
-      sourceHash,
-      sourceFilename: input.sourceFilename,
-      context: input.context as Prisma.InputJsonValue,
-      baseVersion: world.masterVersion,
-      totalChunks: chunks.length,
-      chunks: {
-        create: chunks.map((content, index) => {
-          const sourceStart = chunks
-            .slice(0, index)
-            .reduce((offset, previous) => offset + previous.length, 0);
-          return {
-            index,
-            sourceStart,
-            sourceEnd: sourceStart + content.length,
-            content,
-            contentHash: createHash('sha256').update(content).digest('hex')
-          };
-        })
-      }
-    },
-    include: { chunks: { orderBy: { index: 'asc' } } }
+/** Also protect persisted runs created before snapshot ownership was centralized. */
+async function assertCompileCatalog(run: CompileRunWithChunks) {
+  const version = await prisma.worldVersion.findUnique({
+    where: { worldId_version: { worldId: run.worldId, version: run.baseVersion } }
   });
-  return { run, reused: false };
+  const saved = run.context as unknown as PersistedCompileContext;
+  const catalog = await readCompileCatalog(prisma, run.worldId, run.baseVersion);
+  if (!version || compileCatalogKey(saved?.catalog) !== compileCatalogKey(catalog)) {
+    throw new GovernanceError(
+      'compile_stale_world',
+      'Compile context does not match its recorded version; create a new compile run'
+    );
+  }
 }
 
 async function loadRun(runId: string): Promise<CompileRunWithChunks> {
@@ -433,19 +523,45 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 1000);
 }
 
-async function degradeChapter(run: CompileRunWithChunks, reason: string) {
+/** Hold the run row only for DB work, never while waiting on a provider. The
+ * CAS both fences stale attempts and serializes their writes with cancellation.
+ */
+async function withOwnedRun(
+  runId: string,
+  attempt: number,
+  action: (tx: Prisma.TransactionClient) => Promise<void>
+) {
+  return prisma.$transaction(
+    async (tx) => {
+      const owned = await tx.compileRun.updateMany({
+        where: { id: runId, status: CompileRunStatus.running, attempts: attempt },
+        data: { lastHeartbeatAt: new Date() }
+      });
+      if (owned.count === 0) return false;
+      await action(tx);
+      return true;
+    },
+    { maxWait: 10_000, timeout: 30_000 }
+  );
+}
+
+async function degradeChapter(
+  run: CompileRunWithChunks,
+  reason: string,
+  tx: Prisma.TransactionClient
+) {
   if (run.kind !== 'chapter' || !run.chapterId) return null;
   const content = run.chunks
     .toSorted((a, b) => a.index - b.index)
     .map((chunk) => chunk.content)
     .join('');
   const contentHash = createHash('sha256').update(content).digest('hex');
-  const existingSource = await prisma.source.findUnique({
+  const existingSource = await tx.source.findUnique({
     where: { worldId_contentHash: { worldId: run.worldId, contentHash } }
   });
   const source =
     existingSource ??
-    (await prisma.source.create({
+    (await tx.source.create({
       data: {
         worldId: run.worldId,
         uid: newUid('src'),
@@ -458,74 +574,86 @@ async function degradeChapter(run: CompileRunWithChunks, reason: string) {
         status: 'staged'
       }
     }));
-  await prisma.chapter.update({ where: { id: run.chapterId }, data: { status: 'draft' } });
+  await tx.chapter.update({ where: { id: run.chapterId }, data: { status: 'draft' } });
   return { degradedSourceId: source.id, reason };
 }
 
-async function failRun(runId: string, error: unknown) {
-  const run = await loadRun(runId);
+async function failRun(runId: string, attempt: number, error: unknown) {
   const message = errorMessage(error);
-  const degraded = await degradeChapter(run, message);
-  const result = degraded ? { failed: true, ...degraded } : { failed: true };
-  await prisma.compileRun.update({
-    where: { id: runId },
-    data: {
-      status: CompileRunStatus.failed,
-      error: message,
-      result: result as Prisma.InputJsonValue,
-      finishedAt: new Date()
-    }
+  await withOwnedRun(runId, attempt, async (tx) => {
+    const run = await tx.compileRun.findUniqueOrThrow({
+      where: { id: runId },
+      include: { chunks: { orderBy: { index: 'asc' } } }
+    });
+    await tx.compileChunk.updateMany({
+      where: {
+        runId,
+        status: { in: [CompileChunkStatus.analyzing, CompileChunkStatus.generating] }
+      },
+      data: { status: CompileChunkStatus.failed, error: message }
+    });
+    const degraded = await degradeChapter(run, message, tx);
+    const result = degraded ? { failed: true, ...degraded } : { failed: true };
+    await tx.compileRun.update({
+      where: { id: runId },
+      data: {
+        status: CompileRunStatus.failed,
+        error: message,
+        result: result as Prisma.InputJsonValue,
+        finishedAt: new Date()
+      }
+    });
   });
   return loadRun(runId);
 }
 
-async function currentRunStatus(runId: string) {
-  return prisma.compileRun.findUnique({ where: { id: runId }, select: { status: true } });
-}
-
-async function finishRun(run: CompileRunWithChunks) {
-  const world = await prisma.world.findUnique({ where: { id: run.worldId } });
-  if (!world) throw new GovernanceError('world_not_found', 'World not found');
-  if (world.masterVersion !== run.baseVersion) {
-    throw new GovernanceError(
-      'compile_stale_world',
-      `World advanced from version ${run.baseVersion} to ${world.masterVersion}; compile again`
+async function finishRun(runId: string, attempt: number) {
+  await withOwnedRun(runId, attempt, async (tx) => {
+    const run = await tx.compileRun.findUniqueOrThrow({
+      where: { id: runId },
+      include: { chunks: { orderBy: { index: 'asc' } } }
+    });
+    if (run.chunks.some((chunk) => chunk.status !== CompileChunkStatus.completed)) {
+      throw new GovernanceError('compile_run_active', 'Compile chunks are not all completed');
+    }
+    await tx.$queryRaw`SELECT id FROM worlds WHERE id = ${run.worldId} FOR SHARE`;
+    const world = await tx.world.findUnique({ where: { id: run.worldId } });
+    if (!world) throw new GovernanceError('world_not_found', 'World not found');
+    if (world.masterVersion !== run.baseVersion) {
+      throw new GovernanceError(
+        'compile_stale_world',
+        `World advanced from version ${run.baseVersion} to ${world.masterVersion}; compile again`
+      );
+    }
+    const source = run.sourceId
+      ? await tx.source.findUnique({ where: { id: run.sourceId } })
+      : null;
+    if (!source) throw new GovernanceError('source_not_found', 'Compile source not found');
+    const analyses = run.chunks.map((chunk) => chunk.analysis).filter((value) => value !== null);
+    const generated = mergeGeneratedWorlds(
+      run.chunks.map((chunk) => chunk.generated).filter(Boolean) as unknown as GeneratedWorld[]
     );
-  }
-
-  const source = run.sourceId
-    ? await prisma.source.findUnique({ where: { id: run.sourceId } })
-    : null;
-  if (!source) throw new GovernanceError('source_not_found', 'Compile source not found');
-
-  const analyses = run.chunks.map((chunk) => chunk.analysis).filter((value) => value !== null);
-  const generated = mergeGeneratedWorlds(
-    run.chunks.map((chunk) => chunk.generated).filter(Boolean) as unknown as GeneratedWorld[]
-  );
-  const batchId = run.batchId ?? `bat_compile_${run.id}`;
-  if (!run.batchId) {
-    await prisma.compileRun.update({ where: { id: run.id }, data: { batchId } });
-  }
-  const provenance = buildProvenanceLookup(run, source.uid);
-  const staged = await stageGeneratedWorld(run.worldId, generated, {
-    author: run.kind === 'chapter' ? 'chapter-compiler' : 'world-compiler',
-    batchId,
-    sourceRefs: [source.uid],
-    provenanceFor: (kind, name) => provenance.get(`${kind}:${provenanceKey(name)}`)
-  });
-  const result = {
-    analysis: mergeAnalyses(analyses),
-    staged: staged.staged,
-    defects: staged.defects,
-    batchId: staged.batchId,
-    chunks: run.totalChunks
-  };
-
-  await prisma.$transaction(async (tx) => {
+    const batchId = run.batchId ?? `bat_compile_${run.id}`;
+    const provenance = buildProvenanceLookup(run, source.uid);
+    const staged = await stageGeneratedWorld(run.worldId, generated, {
+      author: run.kind === 'chapter' ? 'chapter-compiler' : 'world-compiler',
+      batchId,
+      sourceRefs: [source.uid],
+      provenanceFor: (kind, name) => provenance.get(`${kind}:${provenanceKey(name)}`),
+      transaction: tx
+    });
+    const result = {
+      analysis: mergeAnalyses(analyses),
+      staged: staged.staged,
+      defects: staged.defects,
+      batchId: staged.batchId,
+      chunks: run.totalChunks
+    };
     await tx.compileRun.update({
       where: { id: run.id },
       data: {
         status: CompileRunStatus.completed,
+        batchId,
         completedChunks: run.totalChunks,
         result: result as Prisma.InputJsonValue,
         error: null,
@@ -542,79 +670,95 @@ async function finishRun(run: CompileRunWithChunks) {
       });
     }
   });
-  return loadRun(run.id);
+  return loadRun(runId);
 }
 
 /** Execute a queued run. The caller may fire this without awaiting it. */
 export async function executeCompileRun(runId: string, runner: ChatFn = defaultChat) {
-  const claimed = await prisma.compileRun.updateMany({
-    where: { id: runId, status: { in: [CompileRunStatus.queued, CompileRunStatus.failed] } },
-    data: {
-      status: CompileRunStatus.running,
-      attempts: { increment: 1 },
-      error: null,
-      finishedAt: null,
-      startedAt: new Date(),
-      lastHeartbeatAt: new Date()
-    }
-  });
-  if (claimed.count === 0) return loadRun(runId);
-
-  const stopHeartbeat = startCompileHeartbeat(runId);
-  try {
-    await prisma.compileChunk.updateMany({
-      where: {
-        runId,
-        status: {
-          in: [
-            CompileChunkStatus.failed,
-            CompileChunkStatus.analyzing,
-            CompileChunkStatus.generating
-          ]
-        }
-      },
-      data: { status: CompileChunkStatus.pending, error: null, startedAt: null }
+  const attempt = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.compileRun.updateMany({
+      where: { id: runId, status: { in: [CompileRunStatus.queued, CompileRunStatus.failed] } },
+      data: {
+        status: CompileRunStatus.running,
+        attempts: { increment: 1 },
+        error: null,
+        finishedAt: null,
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date()
+      }
     });
+    if (claimed.count === 0) return null;
+    // Capture the attempt while still owning its row lock. A later recovery
+    // must not make this executor adopt the new owner's attempt number.
+    return (await tx.compileRun.findUniqueOrThrow({ where: { id: runId } })).attempts;
+  });
+  if (attempt === null) return loadRun(runId);
+
+  const stopHeartbeat = startCompileHeartbeat(runId, attempt);
+  let releaseSlot: (() => void) | undefined;
+  try {
+    await assertCompileCatalog(await loadRun(runId));
+    // Claim first so a competing delivery returns immediately. Heartbeat while
+    // waiting too: API-triggered runs share the worker's expensive-work cap.
+    releaseSlot = await getExecutionLimiter().acquire();
+    const active = await withOwnedRun(runId, attempt, async (tx) => {
+      await tx.compileChunk.updateMany({
+        where: {
+          runId,
+          status: {
+            in: [
+              CompileChunkStatus.failed,
+              CompileChunkStatus.analyzing,
+              CompileChunkStatus.generating
+            ]
+          }
+        },
+        data: { status: CompileChunkStatus.pending, error: null, startedAt: null }
+      });
+    });
+    if (!active) return loadRun(runId);
 
     while (true) {
       const run = await loadRun(runId);
-      if (run.status === CompileRunStatus.cancelled) return run;
+      if (run.status !== CompileRunStatus.running || run.attempts !== attempt) return run;
       const chunk = run.chunks.find((item) => item.status === CompileChunkStatus.pending);
-      if (!chunk) return await finishRun(run);
+      if (!chunk) return await finishRun(runId, attempt);
 
-      const chunkClaimed = await prisma.compileChunk.updateMany({
-        where: { id: chunk.id, status: CompileChunkStatus.pending },
-        data: {
-          status: CompileChunkStatus.analyzing,
-          attempts: { increment: 1 },
-          error: null,
-          startedAt: new Date(),
-          completedAt: null
-        }
+      const chunkClaimed = await withOwnedRun(runId, attempt, async (tx) => {
+        await tx.compileChunk.update({
+          where: { id: chunk.id, status: CompileChunkStatus.pending },
+          data: {
+            status: CompileChunkStatus.analyzing,
+            attempts: { increment: 1 },
+            error: null,
+            startedAt: new Date(),
+            completedAt: null
+          }
+        });
       });
-      if (chunkClaimed.count === 0) continue;
+      if (!chunkClaimed) return loadRun(runId);
 
       const context = asCompileContext(run, chunk.content);
       const analysisResult = await analyzeCompileChunkWithMeta(runner, context, chunk.content);
-      const afterAnalysis = await currentRunStatus(runId);
-      if (!afterAnalysis || afterAnalysis.status === CompileRunStatus.cancelled)
-        return loadRun(runId);
-      await prisma.compileRun.update({
-        where: { id: runId },
-        data: { profileId: analysisResult.meta.profileId, model: analysisResult.meta.model }
+      const analyzed = await withOwnedRun(runId, attempt, async (tx) => {
+        await tx.compileRun.update({
+          where: { id: runId },
+          data: { profileId: analysisResult.meta.profileId, model: analysisResult.meta.model }
+        });
+        enforceCompileBudget(run, analysisResult.meta.profileId, analysisResult.meta);
+        await tx.compileChunk.update({
+          where: { id: chunk.id },
+          data: {
+            status: CompileChunkStatus.generating,
+            analysis: analysisResult.analysis as Prisma.InputJsonValue,
+            analysisMeta: {
+              ...analysisResult.meta,
+              chunkIndex: chunk.index
+            } as Prisma.InputJsonValue
+          }
+        });
       });
-      enforceCompileBudget(run, analysisResult.meta.profileId, analysisResult.meta);
-      await prisma.compileChunk.update({
-        where: { id: chunk.id },
-        data: {
-          status: CompileChunkStatus.generating,
-          analysis: analysisResult.analysis as Prisma.InputJsonValue,
-          analysisMeta: {
-            ...analysisResult.meta,
-            chunkIndex: chunk.index
-          } as Prisma.InputJsonValue
-        }
-      });
+      if (!analyzed) return loadRun(runId);
 
       const generatedResult = await generateCompileChunkWithMeta(
         runner,
@@ -622,39 +766,36 @@ export async function executeCompileRun(runId: string, runner: ChatFn = defaultC
         chunk.content,
         analysisResult.analysis
       );
-      enforceCompileBudget(
-        await loadRun(runId),
-        generatedResult.meta.profileId,
-        generatedResult.meta
-      );
-      await prisma.compileChunk.update({
-        where: { id: chunk.id },
-        data: {
-          status: CompileChunkStatus.completed,
-          generated: generatedResult.generated as unknown as Prisma.InputJsonValue,
-          generationMeta: {
-            ...generatedResult.meta,
-            chunkIndex: chunk.index
-          } as Prisma.InputJsonValue,
-          error: null,
-          completedAt: new Date()
-        }
+      const generated = await withOwnedRun(runId, attempt, async (tx) => {
+        const current = await tx.compileRun.findUniqueOrThrow({
+          where: { id: runId },
+          include: { chunks: { orderBy: { index: 'asc' } } }
+        });
+        enforceCompileBudget(current, generatedResult.meta.profileId, generatedResult.meta);
+        await tx.compileChunk.update({
+          where: { id: chunk.id },
+          data: {
+            status: CompileChunkStatus.completed,
+            generated: generatedResult.generated as unknown as Prisma.InputJsonValue,
+            generationMeta: {
+              ...generatedResult.meta,
+              chunkIndex: chunk.index
+            } as Prisma.InputJsonValue,
+            error: null,
+            completedAt: new Date()
+          }
+        });
+        const completedChunks = await tx.compileChunk.count({
+          where: { runId, status: CompileChunkStatus.completed }
+        });
+        await tx.compileRun.update({ where: { id: runId }, data: { completedChunks } });
       });
-      const completedChunks = await prisma.compileChunk.count({
-        where: { runId, status: CompileChunkStatus.completed }
-      });
-      await prisma.compileRun.update({ where: { id: runId }, data: { completedChunks } });
+      if (!generated) return loadRun(runId);
     }
   } catch (error) {
-    await prisma.compileChunk.updateMany({
-      where: {
-        runId,
-        status: { in: [CompileChunkStatus.analyzing, CompileChunkStatus.generating] }
-      },
-      data: { status: CompileChunkStatus.failed, error: errorMessage(error) }
-    });
-    return failRun(runId, error);
+    return failRun(runId, attempt, error);
   } finally {
+    releaseSlot?.();
     stopHeartbeat();
   }
 }
@@ -672,6 +813,7 @@ export async function recoverStaleCompileRun(worldId: string, runId: string, now
     id: runId,
     worldId,
     status: CompileRunStatus.running,
+    attempts: run.attempts,
     OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: staleBefore } }]
   };
 
@@ -722,9 +864,16 @@ export async function resumeCompileRun(worldId: string, runId: string) {
   if (run.status === CompileRunStatus.running) {
     throw new GovernanceError('compile_run_active', 'Compile run is still active');
   }
-  await prisma.$transaction([
-    prisma.compileRun.update({
-      where: { id: runId },
+  await prisma.$transaction(async (tx) => {
+    const resumed = await tx.compileRun.updateMany({
+      where: {
+        id: runId,
+        worldId,
+        attempts: run.attempts,
+        status: {
+          in: [CompileRunStatus.queued, CompileRunStatus.failed, CompileRunStatus.cancelled]
+        }
+      },
       data: {
         status: CompileRunStatus.queued,
         error: null,
@@ -733,8 +882,11 @@ export async function resumeCompileRun(worldId: string, runId: string) {
         finishedAt: null,
         lastHeartbeatAt: null
       }
-    }),
-    prisma.compileChunk.updateMany({
+    });
+    if (resumed.count === 0) {
+      throw new GovernanceError('compile_run_active', 'Compile run changed during resume');
+    }
+    await tx.compileChunk.updateMany({
       where: {
         runId,
         status: {
@@ -746,8 +898,8 @@ export async function resumeCompileRun(worldId: string, runId: string) {
         }
       },
       data: { status: CompileChunkStatus.pending, error: null, startedAt: null }
-    })
-  ]);
+    });
+  });
   return getCompileRun(worldId, runId);
 }
 

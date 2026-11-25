@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/db/client';
 import { GovernanceError, requireWorld, submitChange } from '@/lib/governance/changes';
 import { getRelationsAt } from './relations';
+import { createChronology } from './chronology';
+import { formatFictionDate, parseCalendar } from './calendar';
 import type { ChatFn } from './genesis';
 import { z } from 'zod';
 import { withLlmUsageBudget } from '@/lib/llm/usage-budget';
@@ -66,20 +68,14 @@ function extractJson(text: string): unknown {
 }
 
 /** 世界状态摘要：光标（或最新）事件、最近时间线、当前活跃关系、作品梗概。 */
-async function buildWorldStateSummary(worldId: string, manuscriptId: string | null) {
+export async function buildWorldStateSummary(worldId: string, manuscriptId: string | null) {
   const world = await requireWorld(worldId);
   const manuscript = manuscriptId
     ? await prisma.manuscript.findFirst({ where: { id: manuscriptId, worldId } })
     : null;
 
-  const anchor = manuscript?.cursorEventUid
-    ? await prisma.chronicleEvent.findFirst({
-        where: { worldId, uid: manuscript.cursorEventUid },
-        orderBy: { version: 'desc' }
-      })
-    : null;
-
-  const thresholdSort = anchor ? anchor.sortOrder : Number.POSITIVE_INFINITY;
+  if (manuscriptId && !manuscript)
+    throw new GovernanceError('manuscript_not_found', 'Manuscript not found');
   const [epochs, entities, events] = await Promise.all([
     prisma.epoch.findMany({
       where: { worldId, version: world.masterVersion },
@@ -94,7 +90,32 @@ async function buildWorldStateSummary(worldId: string, manuscriptId: string | nu
       orderBy: { sortOrder: 'asc' }
     })
   ]);
-  const timeline = events.filter((event) => event.sortOrder <= thresholdSort).slice(-12);
+  const chronology = createChronology(events, epochs);
+  const anchor = manuscript?.cursorEventUid
+    ? chronology.byUid.get(manuscript.cursorEventUid)
+    : null;
+  if (manuscript?.cursorEventUid && !anchor) {
+    throw new GovernanceError(
+      'event_not_found',
+      'Cursor event is absent from the selected version'
+    );
+  }
+  const timeline = chronology.events
+    .filter((event) => !anchor || chronology.atAnchor(event, anchor) === 'included')
+    .slice(-12);
+  const uncertain = anchor
+    ? chronology.events.filter((event) => chronology.atAnchor(event, anchor) === 'uncertain')
+    : [];
+  const calendar = parseCalendar(world.calendarJson);
+  const date = (event: (typeof events)[number]) =>
+    formatFictionDate(
+      {
+        year: event.epochYear,
+        month: event.fictionPrecision === 'year' ? null : event.epochMonth,
+        day: event.fictionPrecision === 'day' ? event.epochDay : null
+      },
+      calendar
+    );
   const epochName = (uid: string | null) => epochs.find((e) => e.uid === uid)?.name ?? '未分期';
 
   const openForeshadows = await prisma.foreshadow.findMany({
@@ -107,7 +128,8 @@ async function buildWorldStateSummary(worldId: string, manuscriptId: string | nu
     atEventUid: anchor ? anchor.uid : null,
     version: world.masterVersion
   });
-  const activeRelations = relationsAt.edges.filter((edge) => edge.active).slice(0, 15);
+  const activeRelations = relationsAt.edges.filter((edge) => edge.active === true).slice(0, 15);
+  const uncertainRelations = relationsAt.edges.filter((edge) => edge.ambiguous);
 
   return {
     world,
@@ -115,12 +137,28 @@ async function buildWorldStateSummary(worldId: string, manuscriptId: string | nu
     summaryText: [
       `【世界】${world.name}：${world.premise || '（无前提）'}`,
       manuscript ? `【作品】${manuscript.title}：${manuscript.synopsis || '（无梗概）'}` : '',
-      `【当前时刻】${anchor ? `事件「${anchor.title}」（${epochName(anchor.epochUid)} ${anchor.epochYear ?? '?'} 年）` : '世界开端（尚无光标）'}`,
+      `【当前时刻】${anchor ? `事件「${anchor.title}」（${epochName(anchor.epochUid)} ${date(anchor)}）` : '世界开端（尚无光标）'}`,
       '【最近时间线】',
       ...timeline.map(
         (event) =>
-          `- ${epochName(event.epochUid)} ${event.epochYear ?? '?'} 年《${event.title}》${event.summary ? `：${event.summary}` : ''}`
+          `- ${epochName(event.epochUid)} ${date(event)}《${event.title}》${event.summary ? `：${event.summary}` : ''}`
       ),
+      ...(uncertain.length
+        ? [
+            `【时间未定，不能当作已发生】${uncertain
+              .slice(0, 12)
+              .map((event) => event.title)
+              .join('、')}`
+          ]
+        : []),
+      ...(uncertainRelations.length
+        ? [
+            `【关系状态未定，不作确定设定】${uncertainRelations
+              .slice(0, 15)
+              .map((edge) => `${edge.subjectName}—${edge.relation}→${edge.objectName}`)
+              .join('；')}`
+          ]
+        : []),
       '【当前活跃关系】',
       ...(activeRelations.length
         ? activeRelations.map(
@@ -151,7 +189,7 @@ export async function generateContinuations(
   chat: ChatFn,
   input: { manuscriptId?: string | null; instruction?: string } = {}
 ) {
-  const { summaryText, epochNames } = await buildWorldStateSummary(
+  const { summaryText, epochNames, anchor } = await buildWorldStateSummary(
     worldId,
     input.manuscriptId ?? null
   );
@@ -202,10 +240,7 @@ export async function generateContinuations(
           kind: candidate.kind,
           payload: candidate as object,
           rationale: candidate.rationale,
-          basisEventUid: input.manuscriptId
-            ? ((await prisma.manuscript.findUnique({ where: { id: input.manuscriptId } }))
-                ?.cursorEventUid ?? null)
-            : null
+          basisEventUid: anchor?.uid ?? null
         }
       })
     );

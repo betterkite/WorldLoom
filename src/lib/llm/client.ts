@@ -1,4 +1,11 @@
 import { getCredential, getDefaultProfileId, getProfile, type LlmProfile } from './config';
+import { LlmBudgetError, reserveLlmCall } from './budget';
+import {
+  beginLlmUsageAttempt,
+  finishLlmUsageAttempt,
+  type LlmUsageAttempt
+} from './usage-tracking';
+import { discardProviderResponse, readProviderJson, ProviderResponseError } from './response-body';
 
 /**
  * Thin OpenAI-compatible chat client over locked profiles.
@@ -18,6 +25,8 @@ export class LlmError extends Error {
     | 'llm_upstream_error'
     | 'llm_empty_completion'
     | 'llm_timeout'
+    | 'llm_budget_exceeded'
+    | 'llm_response_too_large'
     | 'llm_invalid_response';
   readonly status?: number;
   readonly retryAfterMs?: number;
@@ -108,6 +117,13 @@ function retryAfterMs(response: Response): number | undefined {
   return Number.isFinite(seconds) ? Math.min(60_000, seconds * 1_000) : undefined;
 }
 
+/** Stop an unused transport and schedule best-effort body disposal. Cleanup
+ * may reject, throw synchronously or never settle: it must not hold HTTP error
+ * feedback, usage finalization, bounded retries or a header-only probe open.
+ * Abort is a request to the transport, not proof that provider work stopped.
+ */
+const discardResponse = discardProviderResponse;
+
 async function chatOnce(
   profile: LlmProfile,
   request: ChatRequest,
@@ -123,70 +139,123 @@ async function chatOnce(
       `Credential env "${profile.credentialEnv}" is not set for profile "${profile.id}"`
     );
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), profile.timeoutMs);
-  let response: Response;
+  let reservation: ReturnType<typeof reserveLlmCall>;
   try {
-    response = await fetch(endpoint(profile.baseUrl, '/chat/completions'), {
-      method: 'POST',
-      headers: authHeaders(profile),
-      body: JSON.stringify({
-        model: profile.model,
-        messages: request.messages,
-        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {})
-      }),
-      signal: controller.signal
-    });
+    reservation = reserveLlmCall(profile, request);
   } catch {
-    if (controller.signal.aborted) {
+    throw new LlmError('llm_budget_exceeded', profile.id, new LlmBudgetError().message);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let attempt: LlmUsageAttempt | null = null;
+  let usage: ChatResult['usage'] = null;
+  let completed = false;
+  try {
+    const headers = authHeaders(profile);
+    const body = JSON.stringify({
+      model: profile.model,
+      ...(profile.thinkingMode ? { thinking: { type: profile.thinkingMode } } : {}),
+      messages: request.messages,
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {})
+    });
+    attempt = await beginLlmUsageAttempt({ id: profile.id, model: profile.model });
+    timer = setTimeout(() => controller.abort(), profile.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(endpoint(profile.baseUrl, '/chat/completions'), {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal
+      });
+    } catch {
+      throw controller.signal.aborted
+        ? new LlmError(
+            'llm_timeout',
+            profile.id,
+            `Profile "${profile.id}" timed out after ${profile.timeoutMs}ms`
+          )
+        : new LlmError('llm_upstream_error', profile.id, `Profile "${profile.id}" request failed`);
+    }
+    if (!response.ok) {
+      // Preserve the actual HTTP failure; do not parse its private body or
+      // replace it with a cleanup/timeout error when disposal cannot settle.
+      discardResponse(controller, response);
       throw new LlmError(
-        'llm_timeout',
+        'llm_upstream_error',
         profile.id,
-        `Profile "${profile.id}" timed out after ${profile.timeoutMs}ms`
+        `Profile "${profile.id}" returned HTTP ${response.status}`,
+        { status: response.status, retryAfterMs: retryAfterMs(response) }
       );
     }
-    throw new LlmError('llm_upstream_error', profile.id, `Profile "${profile.id}" request failed`);
+    let payload: {
+      choices?: { message?: { content?: string } }[];
+      usage?: ChatCompletionUsage;
+    };
+    try {
+      payload = (await readProviderJson(response, controller.signal)) as typeof payload;
+    } catch (error) {
+      // Capture the deadline state before initiating cleanup ourselves; an
+      // oversize/format rejection is not a model timeout or a spending cap.
+      const timedOut =
+        controller.signal.aborted ||
+        (error instanceof ProviderResponseError && error.code === 'aborted');
+      discardResponse(controller, response);
+      throw timedOut
+        ? new LlmError(
+            'llm_timeout',
+            profile.id,
+            `Profile "${profile.id}" timed out after ${profile.timeoutMs}ms`
+          )
+        : new LlmError(
+            error instanceof ProviderResponseError && error.code === 'too_large'
+              ? 'llm_response_too_large'
+              : 'llm_invalid_response',
+            profile.id,
+            error instanceof ProviderResponseError && error.code === 'too_large'
+              ? `Profile "${profile.id}" returned a response exceeding the read resource limit`
+              : `Profile "${profile.id}" returned non-JSON body`
+          );
+    }
+    usage = normalizeUsage(payload?.usage);
+    reservation?.settle(usage);
+    const content = payload?.choices?.[0]?.message?.content ?? '';
+    if (typeof content !== 'string') {
+      throw new LlmError(
+        'llm_invalid_response',
+        profile.id,
+        `Profile "${profile.id}" returned invalid content`
+      );
+    }
+    if (!content.trim()) {
+      throw new LlmError(
+        'llm_empty_completion',
+        profile.id,
+        `Profile "${profile.id}" returned HTTP 200 with empty content`
+      );
+    }
+    completed = true;
+    return { content, usage };
+  } catch (error) {
+    try {
+      reservation?.unknown();
+    } catch {
+      /* Keep reservation held; never reset the ledger. */
+    }
+    if (error instanceof LlmBudgetError) {
+      throw new LlmError('llm_budget_exceeded', profile.id, error.message);
+    }
+    throw error;
   } finally {
-    clearTimeout(timer);
+    // fetch resolves at headers; keep the deadline active through body parsing.
+    if (timer !== undefined) clearTimeout(timer);
+    if (attempt) await finishLlmUsageAttempt(attempt, usage, completed);
   }
-
-  if (!response.ok) {
-    await response.text().catch(() => '');
-    throw new LlmError(
-      'llm_upstream_error',
-      profile.id,
-      `Profile "${profile.id}" returned HTTP ${response.status}`,
-      { status: response.status, retryAfterMs: retryAfterMs(response) }
-    );
-  }
-
-  let payload: {
-    choices?: { message?: { content?: string } }[];
-    usage?: ChatCompletionUsage;
-  };
-  try {
-    payload = await response.json();
-  } catch {
-    throw new LlmError(
-      'llm_invalid_response',
-      profile.id,
-      `Profile "${profile.id}" returned non-JSON body`
-    );
-  }
-  const content = payload.choices?.[0]?.message?.content ?? '';
-  if (!String(content).trim()) {
-    throw new LlmError(
-      'llm_empty_completion',
-      profile.id,
-      `Profile "${profile.id}" returned HTTP 200 with 0 output tokens`
-    );
-  }
-  return { content, usage: normalizeUsage(payload.usage) };
 }
 
 function nonNegativeInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /**
@@ -259,8 +328,9 @@ export async function detect(profileId?: string | null): Promise<DetectResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DETECT_TIMEOUT_MS);
     const startedAt = Date.now();
+    let response: Response | undefined;
     try {
-      const response = await fetch(endpoint(profile.baseUrl, '/models'), {
+      response = await fetch(endpoint(profile.baseUrl, '/models'), {
         headers: authHeaders(profile),
         signal: controller.signal
       });
@@ -277,6 +347,9 @@ export async function detect(profileId?: string | null): Promise<DetectResult> {
         : 'probe failed';
     } finally {
       clearTimeout(timer);
+      // This probe intentionally uses headers only; successful and failed
+      // bodies alike must not keep an otherwise unused connection open.
+      if (response) discardResponse(controller, response);
     }
   }
 

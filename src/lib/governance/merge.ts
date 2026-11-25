@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db/client';
-import type { Prisma, ChangeKind } from '@prisma/client';
+import { Prisma, type ChangeKind } from '@prisma/client';
 import { GovernanceError, requireWorld } from './changes';
-import { deriveSortOrder } from './schemas';
+import { CHRONOLOGY_FORMAT, createChronology } from '@/lib/worldbuilding/chronology';
 
 /**
  * Merge engine for immutable world versions and audited changes.
@@ -105,18 +105,6 @@ async function applyUpsert(
     const epochUid = (data.epochUid ?? null) as string | null;
     const epochYear = (data.epochYear ?? null) as number | null;
     const precision = (data.fictionPrecision ?? 'year') as string;
-    let epochOrder: number | null = null;
-    if (epochUid) {
-      const epoch = await tx.epoch.findUnique({
-        where: { worldId_version_uid: { worldId, version: nextVersion, uid: epochUid } }
-      });
-      if (!epoch)
-        throw new GovernanceError(
-          'unknown_epoch',
-          `Event ${uid} references unknown epoch ${epochUid}`
-        );
-      epochOrder = epoch.order;
-    }
     const row = {
       title: data.title as string,
       summary: (data.summary ?? '') as string,
@@ -126,7 +114,8 @@ async function applyUpsert(
       epochMonth: (data.epochMonth ?? null) as number | null,
       epochDay: (data.epochDay ?? null) as number | null,
       fictionPrecision: precision,
-      sortOrder: deriveSortOrder(epochOrder, epochYear, precision),
+      // Only a safe placeholder: all dates/epochs settle before ranks are assigned.
+      sortOrder: 0,
       locationUid: (data.locationUid ?? null) as string | null,
       participantUids: (data.participantUids ?? []) as string[],
       confidence: (data.confidence ?? 'INFERRED') as never,
@@ -321,10 +310,39 @@ export async function mergeWorld(worldId: string, options: MergeOptions | string
       });
     }
 
+    const [epochs, events] = await Promise.all([
+      tx.epoch.findMany({ where: { worldId, version: nextVersion } }),
+      tx.chronicleEvent.findMany({ where: { worldId, version: nextVersion } })
+    ]);
+    const epochUids = new Set(epochs.map((epoch) => epoch.uid));
+    const upserted = new Set(
+      changes.filter((change) => change.kind === 'event_upsert').map((change) => change.targetUid)
+    );
+    for (const event of events) {
+      if (upserted.has(event.uid) && event.epochUid && !epochUids.has(event.epochUid)) {
+        throw new GovernanceError(
+          'unknown_epoch',
+          `Event ${event.uid} references an unknown epoch`
+        );
+      }
+    }
+    const chronology = createChronology(events, epochs);
+    // Bounded parameter batches; only the newly appended version is updated.
+    for (let offset = 0; offset < chronology.events.length; offset += 500) {
+      const rows = chronology.events.slice(offset, offset + 500);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE chronicle_events AS event SET "sortOrder" = ranks.position
+        FROM (VALUES ${Prisma.join(rows.map((event) => Prisma.sql`(${event.uid}::text, ${event.chronologyPosition}::integer)`))})
+          AS ranks(uid, position)
+        WHERE event."worldId" = ${worldId} AND event.version = ${nextVersion} AND event.uid = ranks.uid
+      `);
+    }
+
     await tx.worldVersion.create({
       data: {
         worldId,
         version: nextVersion,
+        chronologyFormat: CHRONOLOGY_FORMAT,
         parentVersion: world.masterVersion,
         summary: opts.summary ?? (isRollback ? `Rollback to v${sourceVersion}` : 'Manual merge'),
         changeCount: changes.length,

@@ -2,7 +2,12 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useSuspenseQuery } from '@tanstack/react-query';
-import { lintQueryOptions, relationsAtQueryOptions, timelineQueryOptions } from '../api/queries';
+import {
+  lintQueryOptions,
+  relationsAtQueryOptions,
+  timelineQueryOptions,
+  worldQueryOptions
+} from '../api/queries';
 import { runLintMutation } from '../api/mutations';
 import type { TimelineEvent } from '../api/service';
 import { Badge } from '@/components/ui/badge';
@@ -16,9 +21,11 @@ import { toast } from 'sonner';
  * cards, plus a relationship time-slice viewer (fold as of a chosen event).
  */
 
-export function TimelineTab({ worldId }: { worldId: string }) {
+export function TimelineTab({ worldId, version }: { worldId: string; version?: number }) {
+  const { data: currentWorld } = useSuspenseQuery(worldQueryOptions(worldId));
+  const selectedVersion = version ?? currentWorld.world.masterVersion;
   const [participant, setParticipant] = useState<string | null>(null);
-  const { data } = useSuspenseQuery(timelineQueryOptions(worldId, participant));
+  const { data } = useSuspenseQuery(timelineQueryOptions(worldId, participant, selectedVersion));
 
   const trackRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
@@ -149,7 +156,12 @@ export function TimelineTab({ worldId }: { worldId: string }) {
         </div>
       </div>
 
-      <RelationsSnapshot worldId={worldId} events={data.segments.flatMap((s) => s.events)} />
+      <RelationsSnapshot
+        key={`${worldId}:${data.version}`}
+        worldId={worldId}
+        version={data.version}
+        events={data.segments.flatMap((s) => s.events)}
+      />
     </div>
   );
 }
@@ -168,11 +180,7 @@ function EventCard({
       style={{ zIndex: 20 }}
     >
       <div className='flex items-center justify-between gap-1'>
-        {event.year !== null ? (
-          <span className='text-[10px] font-semibold text-primary'>{event.year} 年</span>
-        ) : (
-          <span />
-        )}
+        <span className='text-[10px] font-semibold text-primary'>{event.dateLabel}</span>
         <span className='text-[10px] text-muted-foreground'>{event.confidence}</span>
       </div>
       <div className='mt-1 text-xs font-medium leading-snug'>{event.title}</div>
@@ -191,9 +199,18 @@ function EventCard({
   );
 }
 
-function RelationsSnapshot({ worldId, events }: { worldId: string; events: TimelineEvent[] }) {
+function RelationsSnapshot({
+  worldId,
+  version,
+  events
+}: {
+  worldId: string;
+  version: number;
+  events: TimelineEvent[];
+}) {
   const [atEvent, setAtEvent] = useState<string | null>(null);
-  const { data } = useSuspenseQuery(relationsAtQueryOptions(worldId, atEvent));
+  const { data } = useSuspenseQuery(relationsAtQueryOptions(worldId, atEvent, version));
+  const eventByUid = new Map(events.map((event) => [event.uid, event]));
   const lint = useSuspenseQuery(lintQueryOptions(worldId));
   const runLint = useMutation({
     ...runLintMutation(worldId),
@@ -212,38 +229,65 @@ function RelationsSnapshot({ worldId, events }: { worldId: string; events: Timel
           onChange={(e) => setAtEvent(e.target.value || null)}
           aria-label='选择时刻'
         >
-          <option value=''>当前主版本</option>
+          <option value=''>当前版本全部关系</option>
           {events.toReversed().map((event) => (
             <option key={event.uid} value={event.uid}>
-              {event.epochName} {event.year !== null ? `${event.year} 年 · ` : ''}
-              {event.title}
+              {event.epochName} {event.dateLabel} · {event.title}
             </option>
           ))}
         </select>
       </div>
       {data.asOf.title && (
-        <p className='text-xs text-muted-foreground'>
-          时刻：「{data.asOf.title}」（sort {data.asOf.sortOrder}）
+        <p className='text-xs text-muted-foreground'>时刻：「{data.asOf.title}」</p>
+      )}
+      {data.counts.ambiguous > 0 && (
+        <p className='text-xs text-amber-700 dark:text-amber-400'>
+          {data.counts.ambiguous} 条关系状态不确定；日期范围重叠或锚点缺失时，无法确定最终状态。
         </p>
       )}
       <div className='flex flex-wrap gap-2'>
-        {data.edges.map((edge, index) => (
-          <span
-            key={`${edge.subjectUid}-${edge.objectUid}-${edge.relation}-${index}`}
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${
-              edge.active
-                ? 'border-primary/30 bg-primary/5'
-                : 'border-muted-foreground/30 text-muted-foreground line-through'
-            }`}
-          >
-            <strong>{edge.subjectName}</strong>
-            <span className='text-muted-foreground'>
-              —{edge.relation}
-              {edge.polarity === 'weaken' ? '(弱化)' : ''}→
-            </span>
-            <strong>{edge.objectName}</strong>
-          </span>
-        ))}
+        {data.edges.map((edge, index) => {
+          const uncertain = edge.ambiguous || edge.active === null;
+          const sources = edge.sourceEventUids.map((uid) => {
+            if (uid === null) return '基础关系（无锚点）';
+            const event = eventByUid.get(uid);
+            return event ? `「${event.title}」` : `事件 ${uid}（未显示或锚点已删除）`;
+          });
+          return (
+            <div
+              key={`${edge.subjectUid}-${edge.objectUid}-${edge.relation}-${index}`}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs ${
+                uncertain
+                  ? 'border-amber-500/40 bg-amber-500/5'
+                  : edge.active === true
+                    ? 'border-primary/30 bg-primary/5'
+                    : 'border-muted-foreground/30 text-muted-foreground'
+              }`}
+            >
+              <span
+                className={`inline-flex items-center gap-1 ${!uncertain && edge.active === false ? 'line-through' : ''}`}
+              >
+                <strong>{edge.subjectName}</strong>
+                <span className='text-muted-foreground'>
+                  —{edge.relation}
+                  {!uncertain && edge.polarity === 'weaken' ? '(弱化)' : ''}→
+                </span>
+                <strong>{edge.objectName}</strong>
+              </span>
+              {uncertain && (
+                <Badge variant='outline' className='ml-2 text-amber-700 dark:text-amber-400'>
+                  不确定
+                </Badge>
+              )}
+              {uncertain && (
+                <div className='mt-1 space-y-0.5 break-all text-muted-foreground'>
+                  <p>来源事件：{sources.join('、') || '未知'}</p>
+                  <p>来源关系：{edge.sourceRelationUids.join('、') || '未知'}</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
         {data.edges.length === 0 && (
           <p className='text-xs text-muted-foreground'>
             该时刻没有已折叠的关系。用条目/事件变更（relation_upsert）推进关系。

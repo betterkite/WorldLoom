@@ -31,20 +31,23 @@ const SYSTEM_ANSWER = `你是世界观创作助手。回答规则：
 3. 证据不足或没有相关设定时，明确回答「现有设定中未找到足够依据」，并列出缺失什么。
 4. 风格：简洁、面向创作者。`;
 
-export async function askWorld(
+interface AskInput {
+  question: string;
+  topK?: number;
+  sediment?: boolean;
+  chatFn?: (request: {
+    messages: ChatMessage[];
+    temperature?: number;
+    maxTokens?: number;
+  }) => Promise<ChatResult>;
+  searchOptions?: { embedFn?: (texts: string[]) => Promise<number[][]> };
+}
+
+/** Generate an answer from one immutable snapshot, without writing QA or canon. */
+async function generateWorldAnswer(
   worldId: string,
-  input: {
-    question: string;
-    topK?: number;
-    sediment?: boolean;
-    chatFn?: (request: {
-      messages: ChatMessage[];
-      temperature?: number;
-      maxTokens?: number;
-    }) => Promise<ChatResult>;
-    searchOptions?: { embedFn?: (texts: string[]) => Promise<number[][]> };
-  }
-): Promise<AskResult> {
+  input: AskInput & { version?: number }
+): Promise<Omit<AskResult, 'qaId'>> {
   const chat = withLlmUsageBudget(input.chatFn ?? defaultChat, 'world Q&A');
   const world = await prisma.world.findUnique({ where: { id: worldId } });
   if (!world) throw new Error(`World not found: ${worldId}`);
@@ -52,9 +55,11 @@ export async function askWorld(
   const question = String(input.question ?? '').trim();
   if (!question) throw new Error('question is required');
 
+  const version = input.version ?? world.masterVersion;
   let search = await searchWorld(worldId, question, {
     topK: input.topK ?? 6,
-    embedFn: input.searchOptions?.embedFn
+    embedFn: input.searchOptions?.embedFn,
+    version
   });
   let rewritten: string | null = null;
 
@@ -64,7 +69,8 @@ export async function askWorld(
     if (rewritten && rewritten !== question) {
       const retry = await searchWorld(worldId, rewritten, {
         topK: input.topK ?? 6,
-        embedFn: input.searchOptions?.embedFn
+        embedFn: input.searchOptions?.embedFn,
+        version
       });
       if (retry.hits.length > 0) search = retry;
     }
@@ -95,34 +101,59 @@ export async function askWorld(
     answer = completion.content;
   }
 
+  return {
+    question,
+    answer,
+    citations,
+    retrieval: { mode: search.mode, hits: search.hits.length, rewritten, semantic: search.semantic }
+  };
+}
+
+/** Evaluations retain only their EvalRun; they must not alter interactive history. */
+export async function answerWorldForEvaluation(
+  worldId: string,
+  input: Omit<AskInput, 'sediment'> & { version: number }
+) {
+  return generateWorldAnswer(worldId, input);
+}
+
+export async function askWorld(worldId: string, input: AskInput): Promise<AskResult> {
+  const result = await generateWorldAnswer(worldId, input);
+  const { question, answer, citations, retrieval } = result;
+
   // sediment (ADR-015 style): explicit request, or repeated quality question
   let sedimentStatus: 'archived' | 'sedimented' = 'archived';
   let sedimentChangeId: string | null = null;
   const shouldSediment =
-    input.sediment === true ||
-    ((await countSimilarQuestions(worldId, question)) >= 3 &&
-      citations.length >= 2 &&
-      answer.length >= 80 &&
-      !/未找到足够依据/.test(answer));
+    input.sediment !== false &&
+    (input.sediment === true ||
+      ((await countSimilarQuestions(worldId, question)) >= 3 &&
+        citations.length >= 2 &&
+        answer.length >= 80 &&
+        !/未找到足够依据/.test(answer)));
   if (shouldSediment && citations.length >= 2) {
     const slugPart = question.slice(0, 40).replace(/[\\/:*?"<>|]+/g, '');
     const { change } = await (
       await import('@/lib/governance/changes')
-    ).submitChange(worldId, {
-      kind: 'entity_upsert',
-      payload: {
-        kind: 'concept',
-        name: `问答：${slugPart}`,
-        aliases: [],
-        summary: answer.slice(0, 200),
-        content: `**问**：${question}\n\n**答**：${answer}\n\n**引用**：${citations.map((c) => `${c.name}`).join('、')}`,
-        confidence: 'INFERRED',
-        tags: ['qa-sediment'],
-        sourceRefs: []
+    ).submitChange(
+      worldId,
+      {
+        kind: 'entity_upsert',
+        payload: {
+          kind: 'concept',
+          name: `问答：${slugPart}`,
+          aliases: [],
+          summary: answer.slice(0, 200),
+          content: `**问**：${question}\n\n**答**：${answer}\n\n**引用**：${citations.map((c) => `${c.name}`).join('、')}`,
+          confidence: 'INFERRED',
+          tags: ['qa-sediment'],
+          sourceRefs: []
+        },
+        author: 'assistant',
+        batchId: undefined
       },
-      author: 'assistant',
-      batchId: undefined
-    });
+      { pendingOnly: true }
+    );
     sedimentStatus = 'sedimented';
     sedimentChangeId = change.id;
   }
@@ -133,12 +164,7 @@ export async function askWorld(
       question,
       answer,
       citations: citations as object[],
-      retrieval: {
-        mode: search.mode,
-        hits: search.hits.length,
-        rewritten,
-        semantic: search.semantic
-      } as object,
+      retrieval: retrieval as object,
       sedimentStatus,
       sedimentChangeId
     }
@@ -146,10 +172,7 @@ export async function askWorld(
 
   return {
     qaId: record.id,
-    question,
-    answer,
-    citations,
-    retrieval: { mode: search.mode, hits: search.hits.length, rewritten, semantic: search.semantic }
+    ...result
   };
 }
 

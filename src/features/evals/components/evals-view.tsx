@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Icons } from '@/components/icons';
 import { toast } from 'sonner';
+import { isValidEvalScore, summarizeAnswerResults } from '@/lib/evals/score';
 
 type World = { id: string; name: string };
 type EvalKind = 'retrieval' | 'answer';
@@ -31,7 +32,7 @@ type EvalRun = {
   id: string;
   version: number;
   mode: 'lexical' | 'hybrid' | 'answer';
-  score: number;
+  score: number | null;
   createdAt: string;
   results:
     | AnswerRow[]
@@ -51,7 +52,7 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
 }
 
 const scoreBadgeVariant = (score: number | null) =>
-  score === null
+  !isValidEvalScore(score)
     ? 'outline'
     : score >= 0.8
       ? 'secondary'
@@ -96,11 +97,15 @@ export function EvalsView() {
   const retrievalCases = cases.filter((c) => c.kind !== 'answer');
   const answerCases = cases.filter((c) => c.kind === 'answer');
   const runs = evalData.data?.runs ?? [];
-  const answerRuns = runs.filter((r) => r.mode === 'answer');
+  const answerRuns = runs
+    .filter((r) => r.mode === 'answer')
+    .map((r) => ({ ...r, ...summarizeAnswerResults(r.results) }));
   const retrievalRuns = runs.filter((r) => r.mode !== 'answer');
   const latestAnswer = answerRuns[0];
   // 榜单：按得分降序
-  const leaderboard = [...answerRuns].toSorted((a, b) => b.score - a.score);
+  const leaderboard = answerRuns
+    .flatMap((run) => (run.score === null ? [] : [{ ...run, score: run.score }]))
+    .toSorted((a, b) => b.score - a.score);
 
   const [form, setForm] = useState<{
     kind: EvalKind;
@@ -134,7 +139,7 @@ export function EvalsView() {
 
   const runRetrieval = useMutation({
     mutationFn: () =>
-      api<{ score: number }>(`/api/worlds/${effectiveWorld}/evals`, 'POST', {
+      api<{ score: number | null }>(`/api/worlds/${effectiveWorld}/evals`, 'POST', {
         cases: retrievalCases.map((c) => ({
           query: c.query,
           expectedUid: c.expectedUid,
@@ -142,7 +147,9 @@ export function EvalsView() {
         }))
       }),
     onSuccess: (r) => {
-      toast.success(`检索跑分完成：命中率 ${(r.score * 100).toFixed(0)}%`);
+      toast.success(
+        r.score === null ? '检索评测未评分' : `检索跑分完成：命中率 ${(r.score * 100).toFixed(0)}%`
+      );
       refresh();
     },
     onError: (e: Error) => toast.error(e.message)
@@ -150,12 +157,18 @@ export function EvalsView() {
 
   const runAnswer = useMutation({
     mutationFn: () =>
-      api<{ score: number }>(`/api/worlds/${effectiveWorld}/evals`, 'POST', {
-        mode: 'answer',
-        cases: answerCases.map((c) => ({ query: c.query, rubric: c.rubric || undefined }))
-      }),
+      api<{ score: number | null; scoredCount: number; totalCount: number }>(
+        `/api/worlds/${effectiveWorld}/evals`,
+        'POST',
+        {
+          mode: 'answer',
+          cases: answerCases.map((c) => ({ query: c.query, rubric: c.rubric || undefined }))
+        }
+      ),
     onSuccess: (r) => {
-      toast.success(`答案评测完成：均分 ${(r.score * 100).toFixed(0)}`);
+      toast.success(
+        `答案评测完成：${r.score === null ? '未评分' : `均分 ${(r.score * 100).toFixed(0)}`}（有效评分 ${r.scoredCount}/${r.totalCount} 例）`
+      );
       refresh();
     },
     onError: (e: Error) => toast.error(e.message)
@@ -313,8 +326,13 @@ export function EvalsView() {
           <div className='flex items-center gap-3'>
             <span className='text-sm font-semibold'>最近答案评测（v{latestAnswer.version}）</span>
             <Badge variant={scoreBadgeVariant(latestAnswer.score)}>
-              均分 {(latestAnswer.score * 100).toFixed(0)}
+              {latestAnswer.score === null
+                ? '未评分'
+                : `均分 ${(latestAnswer.score * 100).toFixed(0)}`}
             </Badge>
+            <span className='text-xs text-muted-foreground'>
+              有效评分 {latestAnswer.scoredCount}/{latestAnswer.totalCount} 例
+            </span>
             <span className='text-xs text-muted-foreground'>
               {new Date(latestAnswer.createdAt).toLocaleString('zh-CN')}
             </span>
@@ -325,7 +343,7 @@ export function EvalsView() {
                 <Badge variant={scoreBadgeVariant(r.score)}>
                   {r.skipped
                     ? '跳过'
-                    : r.score === null
+                    : !isValidEvalScore(r.score)
                       ? '未评分'
                       : `${(r.score * 100).toFixed(0)} 分`}
                 </Badge>
@@ -345,10 +363,15 @@ export function EvalsView() {
               <Badge variant={index === 0 ? 'default' : 'outline'}>#{index + 1}</Badge>
               <Badge variant='outline'>v{r.version}</Badge>
               <span>均分 {(r.score * 100).toFixed(0)}</span>
-              <span className='text-muted-foreground'>{r.results.length} 例</span>
+              <span className='text-muted-foreground'>
+                有效评分 {r.scoredCount}/{r.totalCount} 例
+              </span>
               <span className='ml-auto'>{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
             </div>
           ))}
+          {leaderboard.length === 0 && (
+            <p className='text-xs text-muted-foreground'>暂无有效评分，不参与排名。</p>
+          )}
         </div>
       )}
 
@@ -358,16 +381,10 @@ export function EvalsView() {
             <span className='text-sm font-semibold'>
               最近检索评测（v{latestRetrieval.version} · {latestRetrieval.mode}）
             </span>
-            <Badge
-              variant={
-                latestRetrieval.score >= 0.8
-                  ? 'secondary'
-                  : latestRetrieval.score >= 0.5
-                    ? 'default'
-                    : 'destructive'
-              }
-            >
-              命中率 {(latestRetrieval.score * 100).toFixed(0)}%
+            <Badge variant={scoreBadgeVariant(latestRetrieval.score)}>
+              {latestRetrieval.score === null
+                ? '未评分'
+                : `命中率 ${(latestRetrieval.score * 100).toFixed(0)}%`}
             </Badge>
             <span className='text-xs text-muted-foreground'>
               {new Date(latestRetrieval.createdAt).toLocaleString('zh-CN')}
@@ -394,7 +411,7 @@ export function EvalsView() {
           {retrievalRuns.slice(1).map((r) => (
             <div key={r.id} className='flex items-center gap-2 text-xs text-muted-foreground'>
               <Badge variant='outline'>v{r.version}</Badge>
-              <span>命中率 {(r.score * 100).toFixed(0)}%</span>
+              <span>{r.score === null ? '未评分' : `命中率 ${(r.score * 100).toFixed(0)}%`}</span>
               <span className='ml-auto'>{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
             </div>
           ))}

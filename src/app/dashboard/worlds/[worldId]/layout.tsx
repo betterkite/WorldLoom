@@ -1,6 +1,6 @@
-import { getWorld } from '@/lib/worldbuilding/worlds';
 import { WorldNav } from '@/components/layout/world-nav';
-import { Badge } from '@/components/ui/badge';
+import { WorldStatusHeader } from '@/components/layout/world-status-header';
+import { getWorldOrNotFound } from './get-world-or-not-found';
 
 export default async function WorldLayout({
   children,
@@ -10,16 +10,17 @@ export default async function WorldLayout({
   params: Promise<{ worldId: string }>;
 }) {
   const { worldId } = await params;
-  const world = await getWorld(worldId).catch(() => null);
+  const world = await getWorldOrNotFound(worldId);
   return (
     <div className='space-y-4 px-4 py-4 md:px-8'>
-      <div className='flex flex-wrap items-center gap-3'>
-        <h1 className='text-2xl font-semibold'>{world?.name ?? '世界'}</h1>
-        {world && <Badge>v{world.masterVersion}</Badge>}
-        {world && world.pendingChanges > 0 && (
-          <Badge variant='destructive'>{world.pendingChanges} 待审</Badge>
-        )}
-      </div>
+      <WorldStatusHeader
+        initialWorld={{
+          id: world.id,
+          name: world.name,
+          masterVersion: world.masterVersion,
+          pendingChanges: world.pendingChanges
+        }}
+      />
       <WorldNav worldId={worldId} />
       {children}
     </div>

@@ -7,10 +7,13 @@
  * 用法：node scripts/ui-shots.mjs [baseUrl]      # 服务需已启动并已 build
  */
 import { chromium } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
 const BASE = process.argv[2] ?? 'http://localhost:4310';
-const OUT = 'screenshots';
+const runId = randomUUID();
+const shortRunId = runId.replaceAll('-', '').slice(0, 12);
+const OUT = `screenshots/${runId}`;
 mkdirSync(OUT, { recursive: true });
 
 const api = async (method, path, body) => {
@@ -25,10 +28,7 @@ const api = async (method, path, body) => {
 };
 
 // ---------- ① 播种 ----------
-const worldName = `验收世界 ${new Date().toISOString().slice(0, 10)}`;
-for (const w of (await api('GET', '/api/worlds')).worlds) {
-  if (w.name.startsWith('验收世界')) await api('DELETE', `/api/worlds/${w.id}`);
-}
+const worldName = `验收演示-${shortRunId}`;
 const world = (await api('POST', '/api/worlds', { name: worldName, premise: '修行者以梦为舟，渡人间执念；梦界与人间之间曾有通道，如今被人心封死。' })).world;
 const W = world.id;
 const change = async (kind, payload) => (await api('POST', `/api/worlds/${W}/changes`, { kind, payload })).change.targetUid;
@@ -98,5 +98,5 @@ for (const [name, path] of shots) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
   console.log('shot', name, path);
 }
-console.log(`\n世界：${worldName} (${W})\n截图目录：${OUT}/`);
+console.log(`\nWORLD_ID=${W}\n世界：${worldName}\n截图目录：${OUT}/`);
 await browser.close();

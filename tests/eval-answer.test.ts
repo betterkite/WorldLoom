@@ -4,6 +4,9 @@ import { createWorld } from '@/lib/worldbuilding/worlds';
 import { submitChange } from '@/lib/governance/changes';
 import { mergeWorld } from '@/lib/governance/merge';
 import { runAnswerEval } from '@/lib/evals/answer';
+import { listEvalRuns } from '@/lib/evals/run';
+import { askWorld } from '@/lib/assistant/ask';
+import { searchWorld } from '@/lib/retrieval/search';
 import type { ChatResult } from '@/lib/llm/client';
 import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 
@@ -135,7 +138,9 @@ describe('P7-2 answer eval (LLM judge)', () => {
 
     expect(result.results[0].score).toBeNull();
     expect(result.results[0].reason).toContain('评审输出无法解析');
-    expect(result.score).toBe(0); // 无有效评分 → 均分 0，而不是编造
+    expect(result.score).toBeNull();
+    expect(result.scoredCount).toBe(0);
+    expect(result.totalCount).toBe(1);
     const scored = (result.results as { score: number | null }[]).filter(
       (r) => typeof r.score === 'number'
     );
@@ -148,5 +153,133 @@ describe('P7-2 answer eval (LLM judge)', () => {
     });
     expect(result.results[0].skipped).toBe(true);
     expect(result.results[0].score).toBeNull();
+    expect(result.score).toBeNull();
+    expect(
+      (await prisma.evalRun.findUniqueOrThrow({ where: { id: result.runId } })).score
+    ).toBeNull();
+  });
+
+  it('leaves pending changes and history untouched by evaluation in a legacy auto world', async () => {
+    await prisma.world.update({ where: { id: worldId }, data: { ingestMode: 'auto' } });
+    for (const name of ['原待审一', '原待审二'])
+      await submitChange(worldId, { kind: 'entity_upsert', payload: entityPayload(name) });
+    const question = '云隐子和向顶天的关系';
+    await prisma.qaRecord.createMany({
+      data: Array.from({ length: 3 }, () => ({
+        worldId,
+        question,
+        answer: '历史回答',
+        citations: [],
+        retrieval: {}
+      }))
+    });
+    const beforeWorld = await prisma.world.findUniqueOrThrow({ where: { id: worldId } });
+    const beforePending = await prisma.change.findMany({
+      where: { worldId, status: 'pending' },
+      orderBy: { id: 'asc' }
+    });
+    const beforeVersions = await prisma.worldVersion.findMany({
+      where: { worldId },
+      orderBy: { version: 'asc' }
+    });
+    const answer = '云隐子与向顶天存在师徒关系。[1][2]。'.repeat(8);
+    await runAnswerEval(worldId, [{ query: question }], {
+      chatFn: fakeChat([answer, '{"score":1}'])
+    });
+    expect(await prisma.qaRecord.count({ where: { worldId } })).toBe(3);
+    expect(
+      await prisma.change.findMany({
+        where: { worldId, status: 'pending' },
+        orderBy: { id: 'asc' }
+      })
+    ).toEqual(beforePending);
+    await askWorld(worldId, { question, sediment: false, chatFn: fakeChat([answer]) });
+    expect(await prisma.change.count({ where: { worldId, status: 'pending' } })).toBe(2);
+    await askWorld(worldId, { question, sediment: true, chatFn: fakeChat([answer]) });
+    expect(await prisma.change.count({ where: { worldId, status: 'pending' } })).toBe(3);
+    expect((await prisma.world.findUniqueOrThrow({ where: { id: worldId } })).masterVersion).toBe(
+      beforeWorld.masterVersion
+    );
+    expect(
+      await prisma.worldVersion.findMany({ where: { worldId }, orderBy: { version: 'asc' } })
+    ).toEqual(beforeVersions);
+  });
+
+  it('presents historical no-score rows as null without rewriting the database', async () => {
+    const legacy = await prisma.evalRun.create({
+      data: {
+        worldId,
+        version: 2,
+        mode: 'answer',
+        score: 0,
+        results: [{ score: null, reason: 'old unavailable judge' }]
+      }
+    });
+    const zero = await prisma.evalRun.create({
+      data: {
+        worldId,
+        version: 2,
+        mode: 'answer',
+        score: 0,
+        results: [{ score: 0, reason: 'valid zero' }]
+      }
+    });
+    const rows = await listEvalRuns(worldId);
+    expect(rows.find((row) => row.id === legacy.id)?.score).toBeNull();
+    expect(rows.find((row) => row.id === zero.id)?.score).toBe(0);
+    expect((await prisma.evalRun.findUniqueOrThrow({ where: { id: legacy.id } })).score).toBe(0);
+  });
+
+  it('reads the captured version after a real merge between answer cases', async () => {
+    const original = await prisma.world.findUniqueOrThrow({ where: { id: worldId } });
+    const entity = await prisma.entity.findFirstOrThrow({
+      where: { worldId, version: original.masterVersion, name: '云隐子' }
+    });
+    const prompts: string[] = [];
+    const chatFn = async (request: {
+      messages: { role: string; content: string }[];
+    }): Promise<ChatResult> => {
+      const judge = request.messages[0].content.includes('评测裁判');
+      if (!judge) {
+        prompts.push(request.messages.at(-1)!.content);
+        if (prompts.length === 1) {
+          await submitChange(worldId, {
+            kind: 'entity_upsert',
+            targetUid: entity.uid,
+            payload: {
+              ...entityPayload('云隐子'),
+              summary: 'ONLY_IN_NEW_VERSION'
+            }
+          });
+          await mergeWorld(worldId);
+        }
+      }
+      return {
+        content: judge ? '{"score":1}' : '云隐子是师父 [1]。',
+        profileId: 'fake',
+        model: 'fake',
+        usage: null,
+        latencyMs: 0
+      };
+    };
+    const result = await runAnswerEval(
+      worldId,
+      [{ query: '云隐子是谁' }, { query: '云隐子是谁' }],
+      { chatFn }
+    );
+    expect(result.version).toBe(original.masterVersion);
+    expect(prompts).toHaveLength(2);
+    expect(prompts.every((prompt) => !prompt.includes('ONLY_IN_NEW_VERSION'))).toBe(true);
+    const current = await searchWorld(worldId, '云隐子', { useSemantic: false });
+    expect(current.hits.some((hit) => hit.summary === 'ONLY_IN_NEW_VERSION')).toBe(true);
+    const captured = await searchWorld(worldId, '云隐子', {
+      useSemantic: false,
+      version: original.masterVersion
+    });
+    expect(captured.semantic.version).toBe(original.masterVersion);
+    expect(captured.hits.some((hit) => hit.summary === 'ONLY_IN_NEW_VERSION')).toBe(false);
+    await expect(
+      searchWorld(worldId, '云隐子', { useSemantic: false, version: 99999 })
+    ).rejects.toThrow('World version not found');
   });
 });

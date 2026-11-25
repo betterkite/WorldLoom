@@ -19,6 +19,19 @@ export function validateProviderPricingEvidence(evidence, now = new Date()) {
     return { valid: false, reason: 'invalid' };
   }
 
+  return validateDatedPricingSource(evidence, now);
+}
+
+/** Validate source/date metadata only, not the quoted rates or account terms. */
+export function validateDatedPricingSource(evidence, now = new Date()) {
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    return { valid: false, reason: 'missing' };
+  }
+  const { sourceUrl, checkedAt } = evidence;
+  if (typeof sourceUrl !== 'string' || typeof checkedAt !== 'string') {
+    return { valid: false, reason: 'invalid' };
+  }
+
   try {
     if (new URL(sourceUrl).protocol !== 'https:') return { valid: false, reason: 'invalid' };
   } catch {

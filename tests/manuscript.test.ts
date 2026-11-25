@@ -89,6 +89,33 @@ const WORLD_JSON = JSON.stringify({
   relations: []
 });
 
+describe('import integrity and chapter service limit (issue #12)', () => {
+  beforeEach(cleanDb);
+
+  it('retains a whitespace-only tail and repeated pieces in JSON creation', async () => {
+    const world = await createWorld({ name: '导入完整性' });
+    const content = `${'甲'.repeat(40_000)}${' '.repeat(20_001)}`;
+    const manuscript = await createManuscript(world.id, {
+      title: '完整文本',
+      chapters: [{ content }]
+    });
+    expect(manuscript.chapters.map((chapter) => chapter.content).join('')).toBe(content);
+    expect(manuscript.chapters.every((chapter) => chapter.content.length <= 20_000)).toBe(true);
+  });
+
+  it('enforces the service limit without inserting an oversized chapter; retains whitespace pieces', async () => {
+    const world = await createWorld({ name: '追加完整性' });
+    const manuscript = await createManuscript(world.id, { title: '追加' });
+    await expect(
+      addChapter(world.id, manuscript.id, { content: '甲'.repeat(20_001) })
+    ).rejects.toMatchObject({ code: 'invalid_chapter' });
+    expect(await prisma.chapter.count({ where: { manuscriptId: manuscript.id } })).toBe(0);
+    expect(
+      (await addChapter(world.id, manuscript.id, { content: ' '.repeat(20_000) })).content
+    ).toHaveLength(20_000);
+  });
+});
+
 async function seedWorldWithEvents() {
   const world = await createWorld({ name: '梦舟世界', premise: 'p' });
   const worldId = world.id;

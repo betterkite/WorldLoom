@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/client';
+import { createChronology } from './chronology';
 import { GovernanceError, requireWorld } from '@/lib/governance/changes';
 
 /** Read models over versioned content rows (default: master version). */
@@ -42,10 +43,11 @@ export async function getEntity(worldId: string, uid: string, version?: number |
 
 export async function listEvents(worldId: string, version?: number | string | null) {
   const v = await resolveVersion(worldId, version);
-  return prisma.chronicleEvent.findMany({
-    where: { worldId, version: v },
-    orderBy: { sortOrder: 'asc' }
-  });
+  const [events, epochs] = await Promise.all([
+    prisma.chronicleEvent.findMany({ where: { worldId, version: v } }),
+    prisma.epoch.findMany({ where: { worldId, version: v } })
+  ]);
+  return createChronology(events, epochs).events;
 }
 
 export async function getEvent(worldId: string, uid: string, version?: number | string | null) {

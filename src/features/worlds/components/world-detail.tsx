@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import {
+  detailedChangesQueryOptions,
   entitiesQueryOptions,
   epochsQueryOptions,
   eventsQueryOptions,
@@ -275,37 +276,7 @@ export function EventsTab({ worldId }: { worldId: string }) {
 
 export function ReviewTab({ worldId }: { worldId: string }) {
   const [status, setStatus] = useState<'pending' | 'merged'>('pending');
-  const { data } = useSuspenseQuery({
-    queryKey: ['changes-detailed', worldId, status],
-    queryFn: async () => {
-      const response = await fetch(`/api/worlds/${worldId}/changes?detailed=1&status=${status}`);
-      if (!response.ok) throw new Error('加载失败');
-      return (await response.json()) as {
-        changes: {
-          id: string;
-          kind: string;
-          batchId: string | null;
-          display: string;
-          summary: string;
-          author: string;
-          payload: unknown;
-          candidatePayload: unknown | null;
-          conflict: boolean;
-          provenance: unknown;
-          sourceEvidence: {
-            sourceUid: string;
-            filename: string;
-            start: number;
-            end: number;
-            excerpt: string;
-            truncated: boolean;
-            hashMatches: boolean;
-            sourceHashMatches: boolean;
-          }[];
-        }[];
-      };
-    }
-  });
+  const { data } = useSuspenseQuery(detailedChangesQueryOptions(worldId, status));
   const merge = useMutation({
     ...mergeWorldMutation(worldId),
     onSuccess: (r) =>

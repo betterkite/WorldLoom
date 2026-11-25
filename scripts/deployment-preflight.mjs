@@ -1,13 +1,25 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import {
   PROVIDER_PRICING_EVIDENCE_MAX_AGE_DAYS,
+  validateDatedPricingSource,
   validateProviderPricingEvidence
 } from './provider-pricing-evidence.mjs';
 
-function loadEnvFile(fileName) {
+const args = process.argv.slice(2);
+const strict = args.includes('--strict') || process.env.WORLDLOOM_PREFLIGHT_STRICT === 'true';
+const requireSemantic =
+  args.includes('--require-semantic') ||
+  process.env.WORLDLOOM_PREFLIGHT_REQUIRE_SEMANTIC === 'true';
+// Avoid Node.js' own `--env-file` runtime option, which is consumed before
+// this script starts when passed through `node scripts/...`.
+const envFileIndex = args.indexOf('--runtime-env-file');
+const explicitEnvFile = envFileIndex >= 0 ? args[envFileIndex + 1] : undefined;
+const inheritedEnvironmentKeys = new Set(Object.keys(process.env));
+
+function loadEnvFile(fileName, { overrideUnexported = false } = {}) {
   const filePath = resolve(process.cwd(), fileName);
   if (!existsSync(filePath)) return;
 
@@ -22,20 +34,37 @@ function loadEnvFile(fileName) {
     ) {
       value = value.slice(1, -1);
     }
-    if (process.env[match[1]] === undefined) process.env[match[1]] = value;
+    const inherited = inheritedEnvironmentKeys.has(match[1]);
+    if (!inherited && (process.env[match[1]] === undefined || overrideUnexported)) {
+      process.env[match[1]] = value;
+    }
   }
 }
 
-// Match the environment files used by the local Next.js runtime. Explicitly
-// exported variables still win, so CI and deployment secret stores retain
-// precedence over local files.
-loadEnvFile('.env');
-loadEnvFile('.env.local');
+if (envFileIndex >= 0 && (!explicitEnvFile || explicitEnvFile.startsWith('--'))) {
+  console.error('The --runtime-env-file option requires a path.');
+  process.exit(2);
+}
 
-const args = new Set(process.argv.slice(2));
-const strict = args.has('--strict') || process.env.WORLDLOOM_PREFLIGHT_STRICT === 'true';
-const requireSemantic =
-  args.has('--require-semantic') || process.env.WORLDLOOM_PREFLIGHT_REQUIRE_SEMANTIC === 'true';
+if (explicitEnvFile) {
+  // An explicit file is a declaration of the exact environment source being
+  // checked. This lets operators pair it with e.g. `docker compose --env-file`.
+  try {
+    if (!statSync(resolve(process.cwd(), explicitEnvFile)).isFile()) throw new Error();
+  } catch {
+    console.error('The --runtime-env-file path must point to an existing regular file.');
+    process.exit(2);
+  }
+  loadEnvFile(explicitEnvFile);
+} else if (!strict) {
+  // Local developer mode reads the two documented shared dotenv files:
+  // inherited process env wins, then .env.local overrides .env. This is not a
+  // full emulation of Next.js' mode-specific file loading or variable expansion.
+  // Strict mode never infers that `.env.local` reached a production container.
+  loadEnvFile('.env');
+  loadEnvFile('.env.local', { overrideUnexported: true });
+}
+
 const errors = [];
 const warnings = [];
 const passes = [];
@@ -55,11 +84,11 @@ function fail(message) {
 function checkCredential(envName, label, { required = strict } = {}) {
   const configured = Boolean(process.env[envName]?.trim());
   if (configured) {
-    pass(`${label}: credential configured (${envName})`);
+    pass(`${label}: credential variable is non-empty (${envName})`);
   } else if (required) {
-    fail(`${label}: credential is missing (${envName})`);
+    fail(`${label}: credential variable is empty or missing (${envName})`);
   } else {
-    warn(`${label}: credential is not configured (${envName})`);
+    warn(`${label}: credential variable is empty or missing (${envName})`);
   }
 }
 
@@ -74,12 +103,16 @@ function checkProfileBudget(profileId, profile) {
     const parsePositiveInteger = (envName) => {
       if (process.env[envName] === undefined) return undefined;
       const value = Number(process.env[envName]);
-      return Number.isInteger(value) && value > 0 ? value : null;
+      if (Number.isSafeInteger(value) && value > 0) return value;
+      fail(`${envName} must be a positive safe integer when explicitly set`);
+      return null;
     };
     const parsePositiveNumber = (envName) => {
       if (process.env[envName] === undefined) return undefined;
       const value = Number(process.env[envName]);
-      return Number.isFinite(value) && value > 0 ? value : null;
+      if (Number.isFinite(value) && value > 0) return value;
+      fail(`${envName} must be a positive finite number when explicitly set`);
+      return null;
     };
     const input = parsePositiveInteger('WORLDLOOM_LLM_MAX_INPUT_TOKENS_PER_RUN');
     const output = parsePositiveInteger('WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN');
@@ -100,9 +133,9 @@ function checkProfileBudget(profileId, profile) {
   const pricingEvidence = validateProviderPricingEvidence(profile.pricingEvidence);
   const limitsValid =
     limits &&
-    Number.isInteger(limits.maxInputTokensPerRun) &&
+    Number.isSafeInteger(limits.maxInputTokensPerRun) &&
     limits.maxInputTokensPerRun > 0 &&
-    Number.isInteger(limits.maxOutputTokensPerRun) &&
+    Number.isSafeInteger(limits.maxOutputTokensPerRun) &&
     limits.maxOutputTokensPerRun > 0 &&
     typeof limits.maxEstimatedCostUsdPerRun === 'number' &&
     Number.isFinite(limits.maxEstimatedCostUsdPerRun) &&
@@ -131,6 +164,56 @@ function checkProfileBudget(profileId, profile) {
   } else {
     warn(`${profileId}: LLM operation token and estimated-cost limits are not fully configured`);
   }
+}
+
+function checkCumulativeBudget(config) {
+  const raw = process.env.WORLDLOOM_LLM_BUDGET_CNY;
+  const ledger = process.env.WORLDLOOM_LLM_BUDGET_LEDGER;
+  if (raw === undefined && ledger === undefined) {
+    warn('Cumulative CNY budget guard is disabled; no aggregate application cap is configured');
+    return;
+  }
+
+  // Match the runtime guard: even an explicitly empty variable enables checks.
+  // This is a configuration check; never open, create or reset the ledger here.
+  const limitMicroCny = Math.floor(Number(raw) * 1_000_000);
+  if (raw === undefined || ledger === undefined) {
+    fail('WORLDLOOM_LLM_BUDGET_CNY and WORLDLOOM_LLM_BUDGET_LEDGER must be configured together');
+  }
+  if (!Number.isSafeInteger(limitMicroCny) || limitMicroCny <= 0) {
+    fail('WORLDLOOM_LLM_BUDGET_CNY must be positive and representable as safe integer micro-CNY');
+  } else {
+    pass('WORLDLOOM_LLM_BUDGET_CNY: cumulative application cap is configured');
+  }
+  if (!ledger || !isAbsolute(ledger)) {
+    fail('WORLDLOOM_LLM_BUDGET_LEDGER must be a non-empty absolute path');
+  } else {
+    pass('WORLDLOOM_LLM_BUDGET_LEDGER: absolute path is configured (value withheld)');
+  }
+
+  const profileId = config?.defaultProfileId;
+  const pricing = config?.profiles?.[profileId]?.pricingCny;
+  if (
+    !pricing ||
+    !isFiniteNonNegative(pricing.inputPerMillion) ||
+    pricing.inputPerMillion <= 0 ||
+    !isFiniteNonNegative(pricing.outputPerMillion) ||
+    pricing.outputPerMillion <= 0
+  ) {
+    fail('Default LLM profile: positive finite CNY reservation prices are missing or invalid');
+  } else {
+    pass('Default LLM profile: CNY reservation prices are configured');
+  }
+  const source = validateDatedPricingSource(pricing);
+  if (!source.valid) {
+    fail(
+      `Default LLM profile: CNY price source is ${source.reason}; require an HTTPS source and checkedAt within ${PROVIDER_PRICING_EVIDENCE_MAX_AGE_DAYS} days`
+    );
+  } else {
+    pass('Default LLM profile: CNY price source URL/date metadata are recent');
+  }
+  warn('CNY checks cover the default profile only; other selected profiles need their own CNY prices');
+  warn('CNY ledger writability, persistence, shared mount, recorded usage and provider terms remain unverified');
 }
 
 function loadConfig() {
@@ -200,6 +283,8 @@ if (config) {
     pass('semantic retrieval: local embedding fallback is available');
   }
 }
+
+checkCumulativeBudget(config);
 
 const databaseUrl = process.env.DATABASE_URL?.trim() ?? '';
 if (/^postgres(?:ql)?:\/\//.test(databaseUrl)) pass('DATABASE_URL: PostgreSQL connection is configured');

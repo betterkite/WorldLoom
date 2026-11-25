@@ -16,6 +16,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Local recorded chat attempts, independent of World deletion and budget guards.
+// Never store prompts, completions, credentials or provider error bodies here.
+model LlmUsageCall {
+  id           String    @id @default(uuid())
+  profileId    String
+  model        String
+  status       String    @default("pending") // pending | completed | failed
+  inputTokens  BigInt?
+  outputTokens BigInt?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  @@index([profileId, model])
+  @@index([startedAt])
+  @@map("llm_usage_calls")
+}
+
 // ----------------------------------------
 // World
 // ----------------------------------------
@@ -131,7 +148,7 @@ model ChronicleEvent {
   epochMonth       Int? // 自定义历法下的月序（1-based）
   epochDay         Int? // 自定义历法下的日序（1-based）
   fictionPrecision String     @default("year") // year | month | day
-  sortOrder        Int // 全局排序键：epoch.order * 1e6 + year * 100 + month
+  sortOrder        Int // Legacy coarse key or version-local display rank; see WorldVersion.chronologyFormat
   locationUid      String?
   participantUids  String[]   @default([])
   confidence       Confidence @default(INFERRED)
@@ -372,6 +389,7 @@ model Change {
 }
 
 model WorldVersion {
+  chronologyFormat String @default("legacy") // Legacy rows retain their original stored keys
   id            String   @id @default(cuid())
   worldId       String
   version       Int
@@ -607,7 +625,7 @@ model EvalRun {
   worldId   String
   version   Int
   mode      EvalRunMode
-  score     Float // 命中率 0~1
+  score     Float? // 0~1；答案评测没有有效评分时为 null
   results   Json // [{caseId, query, expectedUid, hit, rank}]
   createdAt DateTime @default(now())
   world     World    @relation(fields: [worldId], references: [id], onDelete: Cascade)

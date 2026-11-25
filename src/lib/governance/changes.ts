@@ -13,6 +13,7 @@ import {
   deriveSortOrder
 } from './schemas';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Change staging service (governance audit chain).
@@ -73,7 +74,12 @@ function ensureTarget(kind: string, targetUid: string | undefined): string {
   return targetUid;
 }
 
-export async function submitChange(worldId: string, input: unknown) {
+export async function submitChange(
+  worldId: string,
+  input: unknown,
+  options: { transaction?: Prisma.TransactionClient; pendingOnly?: boolean } = {}
+) {
+  const database = options.transaction ?? prisma;
   const parsed = submitChangeSchema.safeParse(input);
   if (!parsed.success) {
     throw new GovernanceError(
@@ -83,7 +89,7 @@ export async function submitChange(worldId: string, input: unknown) {
   }
   const { kind, targetUid, author, batchId, provenance } = parsed.data;
 
-  const world = await prisma.world.findUnique({ where: { id: worldId } });
+  const world = await database.world.findUnique({ where: { id: worldId } });
   if (!world) throw new GovernanceError('world_not_found', 'World not found');
 
   const validated = validatePayload(kind, parsed.data.payload);
@@ -92,7 +98,7 @@ export async function submitChange(worldId: string, input: unknown) {
   // change when the same payload was already staged, so a crash during staging
   // cannot duplicate a partially-created batch.
   if (batchId) {
-    const existingBatch = await prisma.change.findMany({
+    const existingBatch = await database.change.findMany({
       where: { worldId, kind, batchId, status: 'pending' }
     });
     const duplicate = existingBatch.find(
@@ -117,7 +123,7 @@ export async function submitChange(worldId: string, input: unknown) {
     uid = ensureTarget(kind, targetUid);
   }
 
-  const change = await prisma.change.create({
+  const change = await database.change.create({
     data: {
       worldId,
       kind,
@@ -132,9 +138,16 @@ export async function submitChange(worldId: string, input: unknown) {
     }
   });
 
-  const pendingCount = await prisma.change.count({ where: { worldId, status: 'pending' } });
+  const pendingCount = await database.change.count({ where: { worldId, status: 'pending' } });
   let merged = null;
-  if (world.ingestMode === 'auto' && pendingCount >= 3) {
+  // Compiler staging (including legacy auto-ingest worlds) always awaits human
+  // review. Never escape a caller's transaction through the global merge path.
+  if (
+    !options.pendingOnly &&
+    !options.transaction &&
+    world.ingestMode === 'auto' &&
+    pendingCount >= 3
+  ) {
     const { mergeWorld } = await import('./merge');
     merged = await mergeWorld(worldId, `Automatic batch merge (${pendingCount} changes)`);
   }

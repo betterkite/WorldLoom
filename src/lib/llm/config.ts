@@ -26,6 +26,15 @@ const profileSchema = z.object({
   credentialEnv: z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'credentialEnv must be an ENV var name'),
   timeoutMs: z.number().int().min(1_000).max(300_000).default(60_000),
   maxRetries: z.number().int().min(0).max(3).default(1),
+  thinkingMode: z.enum(['enabled', 'disabled']).optional(),
+  pricingCny: z
+    .object({
+      inputPerMillion: z.number().positive(),
+      outputPerMillion: z.number().positive(),
+      sourceUrl: z.string().url(),
+      checkedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    })
+    .optional(),
   pricing: z
     .object({
       inputUsdPerMillion: z.number().nonnegative(),
@@ -165,21 +174,36 @@ const RUNTIME_LIMIT_ENV = {
   maxEstimatedCostUsdPerRun: 'WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN'
 } as const;
 
-function runtimePositiveInteger(envName: string): number | null | undefined {
+function runtimePositiveInteger(envName: string): number | undefined {
   const raw = process.env[envName];
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : null;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new LlmConfigError(
+      'llm_budget_config_invalid',
+      `${envName} must be a positive safe integer when explicitly set`
+    );
+  }
+  return value;
 }
 
-function runtimePositiveNumber(envName: string): number | null | undefined {
+function runtimePositiveNumber(envName: string): number | undefined {
   const raw = process.env[envName];
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new LlmConfigError(
+      'llm_budget_config_invalid',
+      `${envName} must be a positive finite number when explicitly set`
+    );
+  }
+  return value;
 }
 
-/** Apply approved deployment overrides; invalid values remain fail-closed. */
+/** Only absent overrides inherit configured limits. Invalid overrides throw
+ * before credentials or an upstream request are accessed; null means unconfigured,
+ * so using it as an invalid-value sentinel would accidentally remove protection.
+ */
 function applyRuntimeLimits(profile: LlmProfile, defaultProfileId: string): LlmProfile {
   if (profile.id !== defaultProfileId) return profile;
   const input = runtimePositiveInteger(RUNTIME_LIMIT_ENV.maxInputTokensPerRun);

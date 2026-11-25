@@ -1,13 +1,19 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { deleteManuscript, getManuscript } from '@/lib/worldbuilding/manuscript';
 import { errorResponse } from '@/lib/api';
+import { getManuscriptSummary } from '@/lib/worldbuilding/manuscript-summary';
 
 type Params = { params: Promise<{ worldId: string; manuscriptId: string }> };
 
-export async function GET(_request: NextRequest, { params }: Params) {
+export async function GET(request: NextRequest, { params }: Params) {
   try {
     const { worldId, manuscriptId } = await params;
-    return NextResponse.json({ manuscript: await getManuscript(worldId, manuscriptId) });
+    const summary = request.nextUrl.searchParams.get('chapters') === 'summary';
+    return NextResponse.json({
+      manuscript: summary
+        ? await getManuscriptSummary(worldId, manuscriptId)
+        : await getManuscript(worldId, manuscriptId)
+    });
   } catch (error) {
     return errorResponse(error);
   }

@@ -33,10 +33,14 @@ const entityPayload = (name: string, kind = 'character') => ({
 });
 
 const stateMap = (graph: {
-  edges: { label: string; eventTitle: string | null; stateAt?: 'active' | 'ended' | 'future' }[];
+  edges: {
+    label: string;
+    eventTitle: string | null;
+    stateAt?: 'active' | 'ended' | 'future' | 'uncertain';
+  }[];
 }) => new Map(graph.edges.map((edge) => [`${edge.label}@${edge.eventTitle}`, edge.stateAt]));
 
-/** B-5 时间切片着色：view=relations 的 stateAt ∈ active | ended | future */
+/** B-5 时间切片着色：状态按所选时刻折叠，标签保留原动作。 */
 describe('graph focus view: relation time-slice states', () => {
   let worldId: string;
 
@@ -107,8 +111,10 @@ describe('graph focus view: relation time-slice states', () => {
     expect(graph.asOf).toBeNull();
     const states = stateMap(graph);
     expect(states.get('师徒@拜师')).toBe('active');
-    expect(states.get('盟友@结盟')).toBe('active');
+    expect(states.get('盟友@结盟')).toBe('ended');
     expect(states.get('盟友·终止@反目')).toBe('ended');
+    expect(graph.edges.find((edge) => edge.eventTitle === '结盟')?.polarity).toBe('establish');
+    expect(graph.edges.find((edge) => edge.eventTitle === '反目')?.polarity).toBe('terminate');
   });
 
   it('classifies active / ended / future as of an anchor event', async () => {

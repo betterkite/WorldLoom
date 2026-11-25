@@ -1,3 +1,4 @@
+import { createChronology } from '@/lib/worldbuilding/chronology';
 import { prisma } from '@/lib/db/client';
 import { requireWorld } from '@/lib/governance/changes';
 import { formatFictionDate, parseCalendar } from '@/lib/worldbuilding/calendar';
@@ -10,7 +11,7 @@ export async function buildGameBundle(worldId: string) {
   const world = await requireWorld(worldId);
   const v = world.masterVersion;
 
-  const [epochs, entities, events, edges, relations, foreshadows] = await Promise.all([
+  const [epochs, entities, eventRows, edges, relations, foreshadows] = await Promise.all([
     prisma.epoch.findMany({ where: { worldId, version: v }, orderBy: { order: 'asc' } }),
     prisma.entity.findMany({ where: { worldId, version: v }, orderBy: { name: 'asc' } }),
     prisma.chronicleEvent.findMany({
@@ -22,6 +23,7 @@ export async function buildGameBundle(worldId: string) {
     prisma.foreshadow.findMany({ where: { worldId }, orderBy: { createdAt: 'asc' } })
   ]);
 
+  const events = createChronology(eventRows, epochs).events;
   const calendar = parseCalendar(world.calendarJson);
   const epochByUid = new Map(epochs.map((e) => [e.uid, e]));
   const causesByEffect = new Map<string, string[]>();
@@ -40,6 +42,7 @@ export async function buildGameBundle(worldId: string) {
   return {
     schemaVersion: 1,
     generator: 'WorldLoom',
+    chronology: 'fiction-date-range-v1',
     exportedAt: new Date().toISOString(),
     world: {
       id: world.id,
@@ -81,11 +84,16 @@ export async function buildGameBundle(worldId: string) {
       month: event.epochMonth ?? null,
       day: event.epochDay ?? null,
       dateLabel: formatFictionDate(
-        { year: event.epochYear, month: event.epochMonth ?? null, day: event.epochDay ?? null },
+        {
+          year: event.epochYear,
+          month: event.fictionPrecision === 'year' ? null : (event.epochMonth ?? null),
+          day: event.fictionPrecision === 'day' ? (event.epochDay ?? null) : null
+        },
         calendar
       ),
       precision: event.fictionPrecision,
       sortOrder: event.sortOrder,
+      chronologyPosition: event.chronologyPosition,
       locationUid: event.locationUid,
       participantUids: event.participantUids,
       confidence: event.confidence,

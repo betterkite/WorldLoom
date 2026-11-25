@@ -55,6 +55,29 @@ export type ChangeRow = {
   createdAt: string;
 };
 
+export type DetailedChangeRow = {
+  id: string;
+  kind: string;
+  batchId: string | null;
+  display: string;
+  summary: string;
+  author: string;
+  payload: unknown;
+  candidatePayload: unknown | null;
+  conflict: boolean;
+  provenance: unknown;
+  sourceEvidence: {
+    sourceUid: string;
+    filename: string;
+    start: number;
+    end: number;
+    excerpt: string;
+    truncated: boolean;
+    hashMatches: boolean;
+    sourceHashMatches: boolean;
+  }[];
+};
+
 export type VersionRow = {
   id: string;
   version: number;

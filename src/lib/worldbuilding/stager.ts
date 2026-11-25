@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { submitChange, GovernanceError } from '@/lib/governance/changes';
 import type { GeneratedWorld } from './contracts';
+import type { Prisma } from '@prisma/client';
 
 /**
  * The staging authority for the WorldLoom compiler contract.
@@ -61,8 +62,12 @@ export async function stageGeneratedWorld(
     batchId?: string;
     sourceRefs?: string[];
     provenanceFor?: (kind: ProvenanceKind, name: string) => CompileProvenance | undefined;
+    transaction?: Prisma.TransactionClient;
   } = {}
 ): Promise<StageResult> {
+  const database = options.transaction ?? prisma;
+  const submitPending = (input: unknown) =>
+    submitChange(worldId, input, { transaction: options.transaction, pendingOnly: true });
   const author = options.author ?? 'world-compiler';
   const batchId =
     options.batchId ?? `bat_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -71,20 +76,20 @@ export async function stageGeneratedWorld(
   const defects: StageResult['defects'] = [];
 
   // ---- resolve the EXISTING master catalog first (updates beat duplicates) ----
-  const world = await prisma.world.findUnique({ where: { id: worldId } });
+  const world = await database.world.findUnique({ where: { id: worldId } });
   if (!world) throw new GovernanceError('world_not_found', 'World not found');
   const v = world.masterVersion;
 
   const [existingEpochs, existingEntities, existingEvents] = await Promise.all([
-    prisma.epoch.findMany({
+    database.epoch.findMany({
       where: { worldId, version: v },
       select: { uid: true, name: true, order: true }
     }),
-    prisma.entity.findMany({
+    database.entity.findMany({
       where: { worldId, version: v },
       select: { uid: true, name: true, kind: true }
     }),
-    prisma.chronicleEvent.findMany({
+    database.chronicleEvent.findMany({
       where: { worldId, version: v },
       select: { uid: true, title: true, sortOrder: true }
     })
@@ -105,7 +110,7 @@ export async function stageGeneratedWorld(
     if (existingUid) {
       newEpochOrder.set(epoch.name, epoch.order);
       epochOrder.set(existingUid, epoch.order);
-      await submitChange(worldId, {
+      await submitPending({
         kind: 'epoch_upsert',
         targetUid: existingUid,
         payload: {
@@ -121,7 +126,7 @@ export async function stageGeneratedWorld(
         provenance: provenanceFor('epoch', epoch.name)
       });
     } else {
-      const { change } = await submitChange(worldId, {
+      const { change } = await submitPending({
         kind: 'epoch_upsert',
         payload: {
           name: epoch.name,
@@ -154,7 +159,7 @@ export async function stageGeneratedWorld(
       sourceRefs
     };
     try {
-      const { change } = await submitChange(worldId, {
+      const { change } = await submitPending({
         kind: 'entity_upsert',
         ...(existingUid ? { targetUid: existingUid } : {}),
         payload,
@@ -198,7 +203,7 @@ export async function stageGeneratedWorld(
 
     const existingUid = eventByTitle.get(key);
     try {
-      const { change } = await submitChange(worldId, {
+      const { change } = await submitPending({
         kind: 'event_upsert',
         ...(existingUid ? { targetUid: existingUid } : {}),
         payload: {
@@ -237,7 +242,7 @@ export async function stageGeneratedWorld(
       .map((title) => eventTitleToUid.get(NAME_KEY(title)))
       .filter((uid): uid is string => Boolean(uid));
     if (causeUids.length === 0) continue;
-    await submitChange(worldId, {
+    await submitPending({
       kind: 'event_upsert',
       targetUid: effectUid,
       payload: {
@@ -286,7 +291,7 @@ export async function stageGeneratedWorld(
       continue;
     }
     try {
-      await submitChange(worldId, {
+      await submitPending({
         kind: 'relation_upsert',
         payload: {
           eventUid,
@@ -313,7 +318,7 @@ export async function stageGeneratedWorld(
     }
   }
 
-  const staged = await prisma.change.count({ where: { worldId, batchId } });
+  const staged = await database.change.count({ where: { worldId, batchId } });
   return {
     batchId,
     staged,

@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/client';
+import { createChronology } from '@/lib/worldbuilding/chronology';
 import { GovernanceError, requireWorld } from './changes';
 
 /** Version list with pending-change counters for the review UI. */
@@ -46,7 +47,8 @@ export async function getVersionSnapshot(worldId: string, version: number) {
     },
     epochs,
     entities,
-    events,
+    events: createChronology(events, epochs).events,
+    chronologyFormat: row.chronologyFormat,
     edges,
     relations,
     conflicts,

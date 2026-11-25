@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { searchWorld } from '@/lib/retrieval/search';
 import { requireWorld } from '@/lib/governance/changes';
+import { summarizeAnswerResults } from './score';
 
 /** P7-2 评测跑分：期望 uid 是否出现在检索结果中（含名次）。 */
 export async function runEval(
@@ -25,7 +26,7 @@ export async function runEval(
   }[] = [];
   const modes = new Set<'lexical' | 'hybrid'>();
   for (const c of cases) {
-    const search = await searchWorld(worldId, c.query, { topK: 10 });
+    const search = await searchWorld(worldId, c.query, { topK: 10, version: world.masterVersion });
     modes.add(search.mode);
     const rank = search.hits.findIndex((h) => h.uid === c.expectedUid);
     results.push({
@@ -60,7 +61,16 @@ export async function runEval(
 
 export async function listEvalRuns(worldId: string) {
   await requireWorld(worldId);
-  return prisma.evalRun.findMany({ where: { worldId }, orderBy: { createdAt: 'desc' }, take: 20 });
+  const runs = await prisma.evalRun.findMany({
+    where: { worldId },
+    orderBy: { createdAt: 'desc' },
+    take: 20
+  });
+  // Older runs stored 0 even when every judge failed. Preserve their raw rows,
+  // but present an aggregate only when valid scores actually support it.
+  return runs.map((run) =>
+    run.mode === 'answer' ? { ...run, ...summarizeAnswerResults(run.results) } : run
+  );
 }
 
 export async function createEvalCase(

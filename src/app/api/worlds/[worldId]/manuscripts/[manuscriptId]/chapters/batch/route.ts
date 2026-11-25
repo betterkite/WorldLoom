@@ -3,13 +3,17 @@ import { addChapter } from '@/lib/worldbuilding/manuscript';
 import { errorResponse, readJsonBody } from '@/lib/api';
 import { MAX_JSON_REQUEST_BYTES } from '@/lib/intake/limits';
 import { z } from 'zod';
+import { IMPORT_CHAPTER_CONTENT_LIMIT } from '@/lib/chapter-split';
 
 type Params = { params: Promise<{ worldId: string; manuscriptId: string }> };
 
 const schema = z.object({
   chapters: z
     .array(
-      z.object({ title: z.string().max(200).optional(), content: z.string().min(1).max(2_000_000) })
+      z.object({
+        title: z.string().max(200).optional(),
+        content: z.string().min(1).max(IMPORT_CHAPTER_CONTENT_LIMIT)
+      })
     )
     .min(1)
     .max(50)

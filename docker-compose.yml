@@ -3,6 +3,9 @@
 # Host port 43133 — WorldLoom-owned local development port.
 # `docker compose --profile full up -d --build` additionally builds and runs the app container (port 4310).
 
+# Keep container and volume identity stable when this standalone repo is moved or cloned.
+name: worldloom
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -35,7 +38,7 @@ services:
       DATABASE_URL: ${WORLDLOOM_CONTAINER_DATABASE_URL:-postgresql://${POSTGRES_USER:-worldloom}:${POSTGRES_PASSWORD:-worldloom}@db:5432/${POSTGRES_DB:-worldloom}}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://127.0.0.1:4310}
       BUILD_STANDALONE: 'true'
       WORLDLOOM_WORKER: ${WORLDLOOM_WORKER:-false}
       WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}
@@ -69,7 +72,7 @@ services:
       DATABASE_URL: ${WORLDLOOM_CONTAINER_DATABASE_URL:-postgresql://${POSTGRES_USER:-worldloom}:${POSTGRES_PASSWORD:-worldloom}@db:5432/${POSTGRES_DB:-worldloom}}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://127.0.0.1:4310}
       BUILD_STANDALONE: 'true'
       WORLDLOOM_WORKER: 'true'
       WORLDLOOM_WORKER_MAX_CONCURRENCY: ${WORLDLOOM_WORKER_MAX_CONCURRENCY:-4}

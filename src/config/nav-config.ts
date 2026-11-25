@@ -13,7 +13,7 @@ export const navGroups: NavGroup[] = [
         url: '/dashboard/overview',
         icon: 'dashboard',
         isActive: false,
-        shortcut: ['d', 'd'],
+        shortcut: ['g', 'w'],
         items: []
       }
     ]

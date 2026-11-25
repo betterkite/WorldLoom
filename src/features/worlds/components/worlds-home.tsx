@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { worldsQueryOptions } from '../api/queries';
 import { CreateWorldDialog } from './create-world-dialog';
 import { deleteWorldMutation } from '../api/mutations';
@@ -15,10 +15,15 @@ import { Heading } from '@/components/ui/heading';
 import PageContainer from '@/components/layout/page-container';
 import { Icons } from '@/components/icons';
 import Link from 'next/link';
+import { LlmUsageCard } from './llm-usage-card';
 
 export function WorldsHome() {
   const queryClient = useQueryClient();
-  const { data } = useSuspenseQuery(worldsQueryOptions());
+  const { data, isError, isFetching, refetch } = useQuery({
+    ...worldsQueryOptions(),
+    retry: false,
+    throwOnError: false
+  });
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const remove = useMutation({
@@ -41,13 +46,29 @@ export function WorldsHome() {
       }
     >
       <div className='space-y-6 px-4 py-4 md:px-8'>
-        <Heading title='世界' description={`共 ${data.worlds.length} 个世界`} />
-        {data.worlds.length === 0 ? (
+        <LlmUsageCard />
+        <Heading title='世界' description={data ? `共 ${data.worlds.length} 个世界` : '世界列表'} />
+        {isError ? (
+          <Card role='alert'>
+            <CardHeader>
+              <CardTitle>世界列表暂时无法加载</CardTitle>
+              <CardDescription>请检查服务连接后重试。侧栏和其他页面仍可使用。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant='outline' onClick={() => void refetch()} disabled={isFetching}>
+                {isFetching ? '正在重试...' : '重新加载世界列表'}
+              </Button>
+            </CardContent>
+          </Card>
+        ) : !data ? (
+          <p role='status' className='text-sm text-muted-foreground'>
+            加载世界列表中...
+          </p>
+        ) : data.worlds.length === 0 ? (
           <Card>
             <CardContent className='flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground'>
               <p>
-                还没有世界。从一句前提开始，创世向导（Phase
-                2）会把你的种子设定编译成完整的世界观与编年史。
+                还没有世界。从一句前提开始，创世向导会把你的种子设定编译成可审阅的世界观与编年史。
               </p>
             </CardContent>
           </Card>

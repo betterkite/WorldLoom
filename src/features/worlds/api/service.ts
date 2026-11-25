@@ -1,5 +1,6 @@
 import type {
   ChangeRow,
+  DetailedChangeRow,
   EntityRow,
   EpochRow,
   EventRow,
@@ -17,6 +18,14 @@ async function getJson<T>(url: string): Promise<T> {
   return body as T;
 }
 
+async function getVersionedJson<T extends { version: number }>(url: string, version?: number) {
+  const body = await getJson<T>(url);
+  if (version !== undefined && body.version !== version) {
+    throw new Error('返回的世界版本与所选版本不一致，请刷新后重试。');
+  }
+  return body;
+}
+
 async function sendJson<T>(url: string, method: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method,
@@ -32,7 +41,18 @@ async function sendJson<T>(url: string, method: string, body?: unknown): Promise
 
 // ---------- worlds ----------
 
-export const fetchWorlds = () => getJson<{ worlds: WorldSummary[] }>('/api/worlds');
+export const fetchWorlds = async () => {
+  const data = await getJson<{ worlds?: unknown }>('/api/worlds');
+  if (
+    !Array.isArray(data?.worlds) ||
+    data.worlds.some(
+      (world) => !world || typeof world.id !== 'string' || typeof world.name !== 'string'
+    )
+  ) {
+    throw new Error('世界列表响应格式无效');
+  }
+  return data as { worlds: WorldSummary[] };
+};
 export const fetchWorld = (worldId: string) =>
   getJson<{ world: WorldDetail }>(`/api/worlds/${worldId}`);
 export const createWorld = (input: {
@@ -182,7 +202,11 @@ export type TimelineEvent = {
   epochUid: string | null;
   epochName: string;
   year: number | null;
+  month: number | null;
+  day: number | null;
+  dateLabel: string;
   sortOrder: number;
+  chronologyPosition: number;
   participantUids: string[];
   participantNames: string[];
   confidence: string;
@@ -206,10 +230,16 @@ export type TimelineResult = {
   entityIndex: { uid: string; name: string; kind: string }[];
 };
 
-export const fetchTimeline = (worldId: string, participant?: string | null) =>
-  getJson<TimelineResult>(
-    `/api/worlds/${worldId}/timeline${participant ? `?participant=${encodeURIComponent(participant)}` : ''}`
+export const fetchTimeline = (worldId: string, participant?: string | null, version?: number) => {
+  const params = new URLSearchParams();
+  if (participant) params.set('participant', participant);
+  if (version !== undefined) params.set('version', String(version));
+  const query = params.toString();
+  return getVersionedJson<TimelineResult>(
+    `/api/worlds/${worldId}/timeline${query ? `?${query}` : ''}`,
+    version
   );
+};
 
 export type RelationEdge = {
   subjectUid: string;
@@ -218,21 +248,39 @@ export type RelationEdge = {
   objectName: string;
   relation: string;
   polarity: string;
-  active: boolean;
+  active: boolean | null;
+  ambiguous: boolean;
+  sourceEventUids: (string | null)[];
+  sourceRelationUids: string[];
   lastEventUid: string | null;
   lastSortOrder: number;
 };
 
 export type RelationsAtResult = {
+  version: number;
+  ordering: 'fiction-date' | 'legacy-sortOrder';
+  warning?: string;
   asOf: { eventUid: string | null; sortOrder: number | null; title: string | null };
   edges: RelationEdge[];
-  counts: { active: number; weakened: number; terminated: number; foundational: number };
+  counts: {
+    active: number;
+    weakened: number;
+    terminated: number;
+    foundational: number;
+    ambiguous: number;
+  };
 };
 
-export const fetchRelationsAt = (worldId: string, atEvent?: string | null) =>
-  getJson<RelationsAtResult>(
-    `/api/worlds/${worldId}/relations${atEvent ? `?atEvent=${encodeURIComponent(atEvent)}` : ''}`
+export const fetchRelationsAt = (worldId: string, atEvent?: string | null, version?: number) => {
+  const params = new URLSearchParams();
+  if (atEvent) params.set('atEvent', atEvent);
+  if (version !== undefined) params.set('version', String(version));
+  const query = params.toString();
+  return getVersionedJson<RelationsAtResult>(
+    `/api/worlds/${worldId}/relations${query ? `?${query}` : ''}`,
+    version
   );
+};
 
 // ---------- lint (Phase 3) ----------
 
@@ -292,7 +340,10 @@ export type GraphData = {
     target: string;
     relation: string;
     polarity: string;
-    active: boolean;
+    active: boolean | null;
+    ambiguous: boolean;
+    sourceEventUids: (string | null)[];
+    sourceRelationUids: string[];
   }[];
   relatedEdges: {
     source: string;
@@ -303,12 +354,54 @@ export type GraphData = {
   communities: { id: number; members: number }[];
 };
 
-export const fetchGraph = (worldId: string) => getJson<GraphData>(`/api/worlds/${worldId}/graph`);
+export const fetchGraph = (worldId: string, version?: number) =>
+  getVersionedJson<GraphData>(
+    `/api/worlds/${worldId}/graph${version !== undefined ? `?version=${version}` : ''}`,
+    version
+  );
+
+export type FocusGraphData = {
+  view: string;
+  version: number;
+  asOf?: { eventUid: string | null; title: string | null } | null;
+  anchorEvents?: { uid: string; title: string; chronologyPosition: number }[];
+  nodes: { uid: string; name: string; kind: string }[];
+  edges: {
+    id: string;
+    source: string;
+    target: string;
+    label: string;
+    polarity: string;
+    eventTitle: string | null;
+    locationName: string | null;
+    stateAt?: 'active' | 'ended' | 'future' | 'uncertain';
+    sourceEventUids?: (string | null)[];
+    sourceRelationUids?: string[];
+  }[];
+};
+
+export const fetchFocusGraph = (
+  worldId: string,
+  view: 'relations' | 'events',
+  options: { asOf?: string | null; version?: number } = {}
+) => {
+  const params = new URLSearchParams({ view });
+  if (options.asOf) params.set('asOf', options.asOf);
+  if (options.version !== undefined) params.set('version', String(options.version));
+  return getVersionedJson<FocusGraphData>(
+    `/api/worlds/${worldId}/graph?${params.toString()}`,
+    options.version
+  );
+};
 
 // ---------- review ----------
 
 export const fetchChanges = (worldId: string) =>
   getJson<{ changes: ChangeRow[] }>(`/api/worlds/${worldId}/changes?status=pending`);
+export const fetchDetailedChanges = (worldId: string, status: 'pending' | 'merged') =>
+  getJson<{ changes: DetailedChangeRow[] }>(
+    `/api/worlds/${worldId}/changes?detailed=1&status=${status}`
+  );
 export const deleteChange = (worldId: string, changeId: string) =>
   sendJson<{ deleted: boolean }>(`/api/worlds/${worldId}/changes/${changeId}`, 'DELETE');
 export const mergeWorld = (worldId: string, summary?: string) =>

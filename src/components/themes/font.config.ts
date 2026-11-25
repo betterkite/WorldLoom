@@ -1,36 +1,14 @@
-import { Geist, Geist_Mono, Inter, JetBrains_Mono, Playfair_Display } from 'next/font/google';
+import './fonts.css';
 
-import { cn } from '@/lib/utils';
+// Preserve the existing family variables and fallback metrics without a
+// build-time Google request. All original Unicode subsets are bundled.
+export const fontVariables = 'worldloom-fonts';
 
-const fontSans = Geist({
-  subsets: ['latin'],
-  variable: '--font-sans'
-});
-
-const fontMono = Geist_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono'
-});
-
-const fontInter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter'
-});
-
-const fontJetBrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-jetbrains-mono'
-});
-
-const fontPlayfairDisplay = Playfair_Display({
-  subsets: ['latin'],
-  variable: '--font-playfair-display'
-});
-
-export const fontVariables = cn(
-  fontSans.variable,
-  fontMono.variable,
-  fontInter.variable,
-  fontJetBrainsMono.variable,
-  fontPlayfairDisplay.variable
-);
+// Match the former next/font latin-only preloads; other subsets load on demand.
+export const fontPreloads = [
+  '/fonts/geist-latin.woff2',
+  '/fonts/geist-mono-latin.woff2',
+  '/fonts/inter-latin.woff2',
+  '/fonts/jetbrains-mono-latin.woff2',
+  '/fonts/playfair-display-latin.woff2'
+] as const;

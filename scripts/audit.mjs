@@ -3,15 +3,19 @@
  * WorldLoom 全量可用性审计（API + 页面冒烟，非 LLM 步骤为主）。
  *
  * 用法（服务需已启动）：
- *   node scripts/audit.mjs            # 默认 http://localhost:4310
- *   node scripts/audit.mjs http://other:4310
+ *   node scripts/audit.mjs [baseUrl] [--keep-world]
+ * 默认自动删除本次唯一审计世界；--keep-world 显式保留供人工检查，不触碰旧世界。
  *
  * 覆盖：治理链播种（epoch/entity/event/relation → merge）· 作品导入 · 伏笔 ·
  * 检索评测用例与跑分 · 全部读 API · 导出 ZIP/JSON · MCP · 全部页面路由。
- * 任何 FAIL 以退出码 1 结束；审计世界留在库中供控制台查看（可重复运行，自动清理旧审计世界）。
+ * 任何 FAIL 以退出码 1 结束；默认只清理本次唯一创建的世界，--keep-world 可显式保留。
  */
 
-const BASE = process.argv[2] ?? 'http://localhost:4310';
+import { randomUUID } from 'node:crypto';
+
+const args = process.argv.slice(2).filter((arg) => arg !== '--');
+const BASE = args.find((arg) => arg !== '--keep-world') ?? 'http://localhost:4310';
+const KEEP_WORLD = args.includes('--keep-world');
 let failures = 0;
 const results = [];
 const FETCH_ATTEMPTS = 3;
@@ -59,17 +63,19 @@ function step(name, ok, detail = '') {
 async function main() {
   console.log(`\nWorldLoom 可用性审计 → ${BASE}\n`);
 
-  // 清理旧审计世界
-  const { body: list } = await call('GET', '/api/worlds');
-  for (const w of list.worlds ?? []) {
-    if (w.name.startsWith('审计世界')) await call('DELETE', `/api/worlds/${w.id}`);
-  }
+  const live = await call('GET', '/api/health/live');
+  step('api.health.live', live.status === 200 && live.body.status === 'ok');
+  const ready = await call('GET', '/api/health/ready');
+  step('api.health.ready', ready.status === 200 && ready.body.status === 'ready');
 
   // 播种
-  const created = await call('POST', '/api/worlds', { name: '审计世界-脚本', premise: '审计用测试世界' });
-  const worldId = created.body.world.id;
+  const worldName = `审计世界-${randomUUID()}`;
+  const created = await call('POST', '/api/worlds', { name: worldName, premise: '审计用测试世界' });
+  const worldId = created.body.world?.id;
   step('seed.world', [200, 201].includes(created.status));
+  if (!worldId) throw new Error('未能创建本次审计世界');
 
+  try {
   const change = async (kind, payload) => {
     const r = await call('POST', `/api/worlds/${worldId}/changes`, { kind, payload });
     if (![200, 201, 202].includes(r.status)) throw new Error(`${kind}: ${r.status}`);
@@ -150,11 +156,23 @@ async function main() {
     step(name, r.status === 200 && text.length > 1000, `${r.status} ${text.length}B`);
   }
 
+  } finally {
+    if (!KEEP_WORLD) {
+      try {
+        const removed = await call('DELETE', `/api/worlds/${worldId}`);
+        step('cleanup.world', [200, 202, 204].includes(removed.status), String(removed.status));
+      } catch (error) {
+        step('cleanup.world', false, error.message);
+      }
+    }
+  }
+
+  if (KEEP_WORLD) console.log(`\n审计世界保留供检查：${worldName} (${worldId})`);
   console.log(`\n==== 总计 ${results.length} 项，失败 ${failures} ====`);
-  process.exit(failures ? 1 : 0);
+  process.exitCode = failures ? 1 : 0;
 }
 
 main().catch((error) => {
   console.error('审计中断：', error.message);
-  process.exit(1);
+  process.exitCode = 1;
 });

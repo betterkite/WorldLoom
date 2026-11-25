@@ -41,7 +41,7 @@ pnpm dev
 2. 修改数据库模型后生成迁移，并在干净数据库执行 `pnpm db:deploy`。
 3. 运行 `pnpm typecheck`、`pnpm lint:strict`、`pnpm build` 和 `pnpm test`。
 4. 涉及页面时运行对应 Playwright E2E 和 `pnpm run audit`。
-5. 发布前运行 `pnpm deployment:preflight -- --strict`，必要时追加 `--require-semantic`。
+5. 本机单人首发按 `docs/LOCAL_DEPLOYMENT.md` 执行独立适用性预检并提供运行记录；未来对外/受控生产仍在解析后的实际环境运行 `pnpm deployment:preflight -- --strict`，必要时追加 `--require-semantic`。普通开发预检不作发布批准，strict 不自动读取 `.env.local`。
 
 ## 运行边界
 

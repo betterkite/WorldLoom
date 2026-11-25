@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { GovernanceError, requireWorld } from '@/lib/governance/changes';
 import { formatFictionDate, parseCalendar } from './calendar';
+import { createChronology } from './chronology';
 
 /**
  * Timeline read model (Phase 3): events grouped into epoch segments with
@@ -28,6 +29,7 @@ export interface TimelineEvent {
   day: number | null;
   dateLabel: string;
   sortOrder: number;
+  chronologyPosition: number;
   participantUids: string[];
   participantNames: string[];
   locationUid: string | null;
@@ -54,7 +56,7 @@ export async function getTimeline(
   });
   if (!exists) throw new GovernanceError('version_not_found', `Version ${version} not found`);
 
-  const [epochs, entities, events, edges] = await Promise.all([
+  const [epochs, entities, eventRows, edges] = await Promise.all([
     prisma.epoch.findMany({ where: { worldId, version }, orderBy: { order: 'asc' } }),
     prisma.entity.findMany({
       where: { worldId, version },
@@ -64,6 +66,7 @@ export async function getTimeline(
     prisma.eventEdge.findMany({ where: { worldId, version } })
   ]);
 
+  const events = createChronology(eventRows, epochs).events;
   const calendar = parseCalendar(world.calendarJson);
   const entityName = new Map(entities.map((e) => [e.uid, e.name]));
   const epochById = new Map(epochs.map((e) => [e.uid, e]));
@@ -94,10 +97,15 @@ export async function getTimeline(
     month: event.epochMonth ?? null,
     day: event.epochDay ?? null,
     dateLabel: formatFictionDate(
-      { year: event.epochYear, month: event.epochMonth ?? null, day: event.epochDay ?? null },
+      {
+        year: event.epochYear,
+        month: event.fictionPrecision === 'year' ? null : (event.epochMonth ?? null),
+        day: event.fictionPrecision === 'day' ? (event.epochDay ?? null) : null
+      },
       calendar
     ),
     sortOrder: event.sortOrder,
+    chronologyPosition: event.chronologyPosition,
     participantUids: event.participantUids,
     participantNames: event.participantUids.map((uid) => entityName.get(uid) ?? uid),
     locationUid: event.locationUid,

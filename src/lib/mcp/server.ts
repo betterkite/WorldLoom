@@ -1,7 +1,6 @@
 import { searchWorld } from '@/lib/retrieval/search';
 import { runLint } from '@/lib/governance/lint';
 import { GovernanceError, requireWorld } from '@/lib/governance/changes';
-import { prisma } from '@/lib/db/client';
 import { createSource } from '@/lib/intake/sources';
 import { createCompileRun, executeCompileRun } from '@/lib/worldbuilding/compile-run';
 import { LlmError, chat } from '@/lib/llm/client';
@@ -117,7 +116,6 @@ async function callTool(
       };
     }
     case 'compile_source': {
-      const world = await prisma.world.findUniqueOrThrow({ where: { id: worldId } });
       const content = String(args.content ?? '');
       if (!content.trim()) throw new Error('content is required');
       const source = await createSource(worldId, {
@@ -125,36 +123,11 @@ async function callTool(
         content,
         author: 'mcp'
       });
-      const [epochs, entities, events] = await Promise.all([
-        prisma.epoch.findMany({
-          where: { worldId, version: world.masterVersion },
-          select: { uid: true, name: true }
-        }),
-        prisma.entity.findMany({
-          where: { worldId, version: world.masterVersion },
-          select: { uid: true, name: true, kind: true }
-        }),
-        prisma.chronicleEvent.findMany({
-          where: { worldId, version: world.masterVersion },
-          select: { uid: true, title: true }
-        })
-      ]);
       const created = await createCompileRun(worldId, {
         kind: 'source',
         sourceId: source.source.id,
         sourceFilename: source.source.filename,
-        sourceContent: source.source.content,
-        context: {
-          worldName: world.name,
-          premise: world.premise,
-          style: world.style,
-          catalog: {
-            epochs: epochs.map((e) => ({ uid: e.uid, name: e.name })),
-            entities: entities.map((e) => ({ uid: e.uid, name: e.name, kind: e.kind })),
-            events: events.map((e) => ({ uid: e.uid, title: e.title }))
-          },
-          sourceFilename: source.source.filename
-        }
+        sourceContent: source.source.content
       });
       void executeCompileRun(created.run.id, runner);
       return {

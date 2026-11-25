@@ -16,6 +16,7 @@ import { createManuscript } from '@/lib/worldbuilding/manuscript';
 import { listChangesDetailed, submitChange } from '@/lib/governance/changes';
 import { mergeWorld } from '@/lib/governance/merge';
 import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
+import { getExecutionLimiter } from '@/lib/worker/execution';
 
 const ANALYSIS = JSON.stringify({
   world_facts: ['分块事实'],
@@ -89,16 +90,6 @@ async function cleanDb() {
   ]);
 }
 
-function context() {
-  return {
-    worldName: '测试世界',
-    premise: '测试前提',
-    style: '',
-    catalog: { epochs: [], entities: [], events: [] },
-    sourceFilename: '测试素材.md'
-  };
-}
-
 function scriptedChat(options: { failAt?: number } = {}) {
   let calls = 0;
   const chat: ChatFn & { calls: () => number } = Object.assign(
@@ -118,12 +109,102 @@ function scriptedChat(options: { failAt?: number } = {}) {
   return chat;
 }
 
+function heldChat(stage: 'analysis' | 'generation', reject = false) {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  const runner: ChatFn = async (request) => {
+    const generation = request.messages.some((message) => message.content.includes('【素材分析】'));
+    if (!held && generation === (stage === 'generation')) {
+      held = true;
+      entered();
+      await barrier;
+      if (reject) throw new Error('late obsolete provider error');
+    }
+    return {
+      content: generation ? GENERATED : ANALYSIS,
+      model: 'fake',
+      profileId: 'fake',
+      usage: null,
+      latencyMs: 1
+    };
+  };
+  return { runner, started, release: () => release() };
+}
+
 describe('durable compiler runs (ISS-31)', () => {
   let worldId: string;
 
   beforeEach(async () => {
     await cleanDb();
     worldId = (await createWorld({ name: '测试世界', premise: '测试前提' })).id;
+  });
+
+  it('caps API-style bursts before model work and skips a cancelled slot waiter', async () => {
+    const limiter = getExecutionLimiter();
+    const cap = limiter.snapshot().limit;
+    let releaseCalls!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseCalls = resolve;
+    });
+    let entered = 0;
+    const runner: ChatFn = async (request) => {
+      const generation = request.messages.some((message) =>
+        message.content.includes('【素材分析】')
+      );
+      if (!generation) {
+        entered += 1;
+        await barrier;
+      }
+      return {
+        content: generation ? GENERATED : ANALYSIS,
+        model: 'fake',
+        profileId: 'fake',
+        usage: null,
+        latencyMs: 1
+      };
+    };
+    const created = await Promise.all(
+      Array.from({ length: cap + 1 }, (_, index) =>
+        createCompileRun(worldId, {
+          kind: 'source',
+          sourceFilename: `burst-${index}.txt`,
+          sourceContent: `unique-${index}`
+        })
+      )
+    );
+    const executions = created.map(({ run }) => executeCompileRun(run.id, runner));
+    try {
+      const deadline = Date.now() + 2_000;
+      while (true) {
+        if (entered >= cap && limiter.snapshot().waiting >= 1) break;
+        if (Date.now() > deadline) throw new Error('execution gate was not reached');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(entered).toBe(cap);
+      const runs = await prisma.compileRun.findMany({ where: { worldId, status: 'running' } });
+      // CAS ownership is recorded before the process-local slot. Redelivery
+      // still returns immediately; waiting owners continue heartbeating.
+      expect(runs).toHaveLength(cap + 1);
+      const chunks = await prisma.compileChunk.findMany({
+        where: { runId: { in: runs.map((run) => run.id) }, status: 'pending' }
+      });
+      expect(chunks).toHaveLength(1);
+      await cancelCompileRun(worldId, chunks[0].runId);
+      const owner = runs.find((run) => run.id !== chunks[0].runId)!;
+      expect((await executeCompileRun(owner.id, runner)).status).toBe('running');
+    } finally {
+      releaseCalls();
+      await Promise.all(executions);
+    }
+    expect(entered).toBe(cap);
+    expect(limiter.snapshot()).toMatchObject({ active: 0, waiting: 0 });
   });
 
   it('checkpoints completed chunks and resumes only the failed chunk', async () => {
@@ -141,8 +222,7 @@ describe('durable compiler runs (ISS-31)', () => {
       kind: 'source',
       sourceId: source.id,
       sourceFilename: source.filename,
-      sourceContent: source.content,
-      context: context()
+      sourceContent: source.content
     });
     expect(created.run.totalChunks).toBe(2);
 
@@ -231,8 +311,7 @@ describe('durable compiler runs (ISS-31)', () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
       sourceFilename: '并发领取.md',
-      sourceContent: '唯一分块',
-      context: context()
+      sourceContent: '唯一分块'
     });
     let calls = 0;
     let signalStarted!: () => void;
@@ -274,8 +353,7 @@ describe('durable compiler runs (ISS-31)', () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
       sourceFilename: '取消.md',
-      sourceContent: '乙'.repeat(1_200),
-      context: context()
+      sourceContent: '乙'.repeat(1_200)
     });
     await cancelCompileRun(worldId, created.run.id);
     const chat = scriptedChat();
@@ -283,6 +361,248 @@ describe('durable compiler runs (ISS-31)', () => {
     expect(cancelled.status).toBe('cancelled');
     expect(chat.calls()).toBe(0);
     expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+  });
+
+  it.each(['analysis', 'generation'] as const)(
+    'fences cancellation during %s before any staging/finalization',
+    async (stage) => {
+      const manuscript = await createManuscript(worldId, {
+        title: '取消中',
+        chapters: [{ content: '取消测试' }]
+      });
+      const chapter = manuscript.chapters[0];
+      const created = await createChapterCompileRun(worldId, manuscript.id, chapter.id);
+      const held = heldChat(stage);
+      const execution = executeCompileRun(created.run.id, held.runner);
+      try {
+        await held.started;
+        expect((await cancelCompileRun(worldId, created.run.id)).status).toBe('cancelled');
+      } finally {
+        held.release();
+      }
+      const result = await execution;
+      expect(result.status).toBe('cancelled');
+      expect(result.completedChunks).toBe(0);
+      expect(result.chunks[0].generated).toBeNull();
+      expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+      expect((await prisma.chapter.findUniqueOrThrow({ where: { id: chapter.id } })).status).toBe(
+        'draft'
+      );
+      expect(
+        (await prisma.source.findUniqueOrThrow({ where: { id: result.sourceId! } })).status
+      ).toBe('staged');
+      expect(await prisma.worldVersion.count({ where: { worldId } })).toBe(1);
+    }
+  );
+
+  it.each(['analysis', 'generation'] as const)(
+    'does not replace cancellation with a late %s error or degrade the chapter',
+    async (stage) => {
+      const manuscript = await createManuscript(worldId, {
+        title: '晚到错误',
+        chapters: [{ content: '取消测试' }]
+      });
+      const created = await createChapterCompileRun(
+        worldId,
+        manuscript.id,
+        manuscript.chapters[0].id
+      );
+      const held = heldChat(stage, true);
+      const execution = executeCompileRun(created.run.id, held.runner);
+      let cancelled;
+      try {
+        await held.started;
+        cancelled = await cancelCompileRun(worldId, created.run.id);
+      } finally {
+        held.release();
+      }
+      const result = await execution;
+      expect(result.status).toBe('cancelled');
+      expect(result.error).toBe('Cancelled by user');
+      expect(result.finishedAt).toEqual(cancelled!.finishedAt);
+      expect(result.result).toBeNull();
+      expect(result.chunks[0].status).toBe(stage === 'generation' ? 'generating' : 'analyzing');
+      expect(result.chunks[0].generationMeta).toBeNull();
+      expect(
+        (await prisma.chapter.findUniqueOrThrow({ where: { id: manuscript.chapters[0].id } }))
+          .status
+      ).toBe('draft');
+      expect(
+        (await prisma.source.findUniqueOrThrow({ where: { id: result.sourceId! } })).status
+      ).toBe('staged');
+      expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+      expect(await prisma.source.count({ where: { worldId } })).toBe(1);
+    }
+  );
+
+  it.each([false, true])(
+    'fences a stale executor response/error after recovery (reject=%s)',
+    async (reject) => {
+      const created = await createCompileRun(worldId, {
+        kind: 'source',
+        sourceFilename: '旧执行者.txt',
+        sourceContent: '恢复测试'
+      });
+      const held = heldChat('generation', reject);
+      const obsolete = executeCompileRun(created.run.id, held.runner);
+      let completed;
+      try {
+        await held.started;
+        const future = new Date(Date.now() + COMPILE_RUN_STALE_AFTER_MS * 2);
+        expect((await recoverStaleCompileRun(worldId, created.run.id, future)).status).toBe(
+          'queued'
+        );
+        completed = await executeCompileRun(created.run.id, scriptedChat());
+        expect(completed.status).toBe('completed');
+        expect(completed.attempts).toBe(2);
+      } finally {
+        held.release();
+      }
+      const result = await obsolete;
+      expect(result).toEqual(completed);
+      expect(await prisma.change.count({ where: { worldId } })).toBe(5);
+      expect(await prisma.worldVersion.count({ where: { worldId } })).toBe(1);
+    }
+  );
+
+  it.each([
+    { restart: 'recovery', reject: false },
+    { restart: 'recovery', reject: true },
+    { restart: 'cancel-resume', reject: false },
+    { restart: 'cancel-resume', reject: true }
+  ] as const)(
+    'fences old results while the replacement is still running ($restart, reject=$reject)',
+    async ({ restart, reject }) => {
+      const manuscript = await createManuscript(worldId, {
+        title: '新旧执行者交错',
+        chapters: [{ content: '交错恢复测试' }]
+      });
+      const chapter = manuscript.chapters[0];
+      const created = await createChapterCompileRun(worldId, manuscript.id, chapter.id);
+      const old = heldChat('generation', reject);
+      const replacement = heldChat('generation');
+      const obsolete = executeCompileRun(created.run.id, old.runner);
+      let current: ReturnType<typeof executeCompileRun> | undefined;
+      const persisted = () =>
+        prisma.compileRun.findUniqueOrThrow({
+          where: { id: created.run.id },
+          include: { chunks: { orderBy: { index: 'asc' } } }
+        });
+      try {
+        await old.started;
+        if (restart === 'recovery') {
+          const future = new Date(Date.now() + COMPILE_RUN_STALE_AFTER_MS * 2);
+          expect((await recoverStaleCompileRun(worldId, created.run.id, future)).status).toBe(
+            'queued'
+          );
+        } else {
+          await cancelCompileRun(worldId, created.run.id);
+          await resumeCompileRun(worldId, created.run.id);
+        }
+        current = executeCompileRun(created.run.id, replacement.runner);
+        await replacement.started;
+        const before = await persisted();
+        expect(before.status).toBe('running');
+        expect(before.attempts).toBe(2);
+        expect(before.chunks[0].status).toBe('generating');
+        old.release();
+        const obsoleteResult = await obsolete;
+        expect(obsoleteResult.status).toBe('running');
+        expect(obsoleteResult.attempts).toBe(2);
+        // The new owner's regular heartbeat is allowed to advance independently.
+        const after = await persisted();
+        expect({ ...after, lastHeartbeatAt: null }).toEqual({ ...before, lastHeartbeatAt: null });
+        expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+        expect((await prisma.chapter.findUniqueOrThrow({ where: { id: chapter.id } })).status).toBe(
+          'draft'
+        );
+        expect(
+          (await prisma.source.findUniqueOrThrow({ where: { id: before.sourceId! } })).status
+        ).toBe('staged');
+      } finally {
+        old.release();
+        replacement.release();
+        await Promise.allSettled([obsolete, ...(current ? [current] : [])]);
+      }
+      const completed = await current!;
+      expect(completed.status).toBe('completed');
+      expect(completed.attempts).toBe(2);
+      expect(
+        await prisma.change.count({
+          where: { worldId, status: 'pending', batchId: completed.batchId }
+        })
+      ).toBe(5);
+      expect((await prisma.chapter.findUniqueOrThrow({ where: { id: chapter.id } })).status).toBe(
+        'final'
+      );
+      expect(await prisma.worldVersion.count({ where: { worldId } })).toBe(1);
+    }
+  );
+
+  it('rolls back staging when chapter finalization fails, then resumes with one pending batch', async () => {
+    const manuscript = await createManuscript(worldId, {
+      title: '原子完成',
+      chapters: [{ content: '原子完成测试' }]
+    });
+    const created = await createChapterCompileRun(
+      worldId,
+      manuscript.id,
+      manuscript.chapters[0].id
+    );
+    // Integration-only fault in the throwaway database. It fires after staging,
+    // not before, and does not prevent failure degradation back to draft.
+    await prisma.$executeRawUnsafe(
+      "CREATE FUNCTION worldloom_issue12_reject_final() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic finalization failure'; END $$"
+    );
+    try {
+      await prisma.$executeRawUnsafe(
+        "CREATE TRIGGER worldloom_issue12_reject_final BEFORE UPDATE ON chapters FOR EACH ROW WHEN (NEW.status = 'final') EXECUTE FUNCTION worldloom_issue12_reject_final()"
+      );
+      const failed = await executeCompileRun(created.run.id, scriptedChat());
+      expect(failed.status).toBe('failed');
+      expect(failed.completedChunks).toBe(1);
+      expect(failed.batchId).toBeNull();
+      expect(await prisma.change.count({ where: { worldId } })).toBe(0);
+      expect(
+        (await prisma.chapter.findUniqueOrThrow({ where: { id: manuscript.chapters[0].id } }))
+          .status
+      ).toBe('draft');
+      expect(
+        (await prisma.source.findUniqueOrThrow({ where: { id: failed.sourceId! } })).status
+      ).toBe('staged');
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS worldloom_issue12_reject_final ON chapters'
+      );
+      await prisma.$executeRawUnsafe('DROP FUNCTION worldloom_issue12_reject_final()');
+    }
+    await resumeCompileRun(worldId, created.run.id);
+    const runner = scriptedChat();
+    const completed = await executeCompileRun(created.run.id, runner);
+    expect(completed.status).toBe('completed');
+    expect(runner.calls()).toBe(0);
+    expect(
+      await prisma.change.count({
+        where: { worldId, status: 'pending', batchId: completed.batchId }
+      })
+    ).toBe(5);
+    expect(await prisma.worldVersion.count({ where: { worldId } })).toBe(1);
+  });
+
+  it('keeps compiler output pending even for a legacy auto-ingest world', async () => {
+    await prisma.world.update({ where: { id: worldId }, data: { ingestMode: 'auto' } });
+    const created = await createCompileRun(worldId, {
+      kind: 'source',
+      sourceFilename: '待审.txt',
+      sourceContent: '待审测试'
+    });
+    const completed = await executeCompileRun(created.run.id, scriptedChat());
+    expect(completed.status).toBe('completed');
+    expect(await prisma.change.count({ where: { worldId, status: 'pending' } })).toBe(5);
+    expect((await prisma.world.findUniqueOrThrow({ where: { id: worldId } })).masterVersion).toBe(
+      1
+    );
+    expect(await prisma.worldVersion.count({ where: { worldId } })).toBe(1);
   });
 
   it('stops after a provider response exceeds the estimated-cost threshold', async () => {
@@ -299,8 +619,7 @@ describe('durable compiler runs (ISS-31)', () => {
       const created = await createCompileRun(worldId, {
         kind: 'source',
         sourceFilename: '费用门禁.md',
-        sourceContent: '预算测试素材',
-        context: context()
+        sourceContent: '预算测试素材'
       });
       let calls = 0;
       const runner: ChatFn = async () => {
@@ -342,8 +661,7 @@ describe('durable compiler runs (ISS-31)', () => {
       const created = await createCompileRun(worldId, {
         kind: 'source',
         sourceFilename: '用量缺失.md',
-        sourceContent: '用量完整性测试',
-        context: context()
+        sourceContent: '用量完整性测试'
       });
       let calls = 0;
       const runner: ChatFn = async () => {
@@ -374,8 +692,7 @@ describe('durable compiler runs (ISS-31)', () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
       sourceFilename: '过期.md',
-      sourceContent: '丙',
-      context: context()
+      sourceContent: '丙'
     });
     await submitChange(worldId, { kind: 'epoch_upsert', payload: { name: '新纪', order: 0 } });
     await mergeWorld(worldId, 'advance before compile');
@@ -421,8 +738,7 @@ describe('durable compiler runs (ISS-31)', () => {
       kind: 'source',
       sourceId: source.id,
       sourceFilename: source.filename,
-      sourceContent: source.content,
-      context: context()
+      sourceContent: source.content
     });
     const now = new Date('2026-09-22T10:00:00.000Z');
     const firstChunk = created.run.chunks[0];
@@ -463,8 +779,7 @@ describe('durable compiler runs (ISS-31)', () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
       sourceFilename: '恢复耗尽.md',
-      sourceContent: '庚',
-      context: context()
+      sourceContent: '庚'
     });
     const now = new Date('2026-09-24T10:00:00.000Z');
     await prisma.compileRun.update({
@@ -495,8 +810,7 @@ describe('durable compiler runs (ISS-31)', () => {
     const created = await createCompileRun(worldId, {
       kind: 'source',
       sourceFilename: '活跃任务.md',
-      sourceContent: '己',
-      context: context()
+      sourceContent: '己'
     });
     const now = new Date('2026-09-22T10:00:00.000Z');
     await prisma.compileRun.update({

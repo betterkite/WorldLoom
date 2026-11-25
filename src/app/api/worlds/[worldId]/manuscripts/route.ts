@@ -11,9 +11,6 @@ export async function GET(_request: NextRequest, { params }: Params) {
     const { worldId } = await params;
     return NextResponse.json({ manuscripts: await listManuscripts(worldId) });
   } catch (error) {
-    if (error instanceof Error && error.message.includes('[import-diag]')) {
-      console.error(error.message);
-    }
     return errorResponse(error);
   }
 }

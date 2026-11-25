@@ -1,0 +1,112 @@
+[
+  {
+    "package": "@react-three/fiber",
+    "version": "9.7.0",
+    "registry": "https://registry.npmjs.org/%40react-three%2Ffiber/9.7.0",
+    "integrity": "sha512-EWm9FwcaOZQu/ExFW5rggoCMM1NJet5YbxVxKaOE+KSncrjU0Wx7017qSyGFvupviK89nMYGCWU3BIK4dI1clw==",
+    "gitHead": "0a107412ac64667b1908422e859447952f57feef",
+    "source": "https://raw.githubusercontent.com/pmndrs/react-three-fiber/0a107412ac64667b1908422e859447952f57feef/LICENSE",
+    "file": "@react-three--fiber@9.7.0.LICENSE.NOTICE",
+    "sha256": "9c35b5de7b7493a707fffe4eb23bd2f7f449153c1911f7c6eefb4e591fd5349a"
+  },
+  {
+    "package": "draco3d",
+    "version": "1.5.7",
+    "registry": "https://registry.npmjs.org/draco3d/1.5.7",
+    "integrity": "sha512-m6WCKt/erDXcw+70IJXnG7M3awwQPAsZvJGX5zY7beBqpELw6RDGkYVU0W43AFxye4pDZ5i2Lbyc/NNGqwjUVQ==",
+    "gitHead": "8786740086a9f4d83f44aa83badfbea4dce7a1b5",
+    "source": "https://raw.githubusercontent.com/google/draco/8786740086a9f4d83f44aa83badfbea4dce7a1b5/LICENSE",
+    "file": "draco3d@1.5.7.LICENSE.NOTICE",
+    "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4"
+  },
+  {
+    "package": "@mediapipe/tasks-vision",
+    "version": "0.10.17",
+    "registry": "https://registry.npmjs.org/%40mediapipe%2Ftasks-vision/0.10.17",
+    "integrity": "sha512-CZWV/q6TTe8ta61cZXjfnnHsfWIdFhms03M9T7Cnd5y2mdpylJM0rF1qRq+wsQVRMLz1OYPVEBU9ph2Bx8cxrg==",
+    "source": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.17.tgz",
+    "file": "@mediapipe--tasks-vision@0.10.17.copyright.NOTICE",
+    "sha256": "ca6ba2c51a49d9f4607ef18613d3cb539a836d6d2ee91110b668571ec78cc6ec",
+    "evidence": "Original headers in locked npm files, deduplicated in source order.",
+    "inputFiles": {
+      "vision.d.ts": "fc8a3cf4a55f7d1ae3f2efdda84bbeaeea605a92e535ac52b99deed6366917d5",
+      "vision_bundle.mjs.map": "20ced060885d04d8b2627b89b0c7af7f061d734c18573cbaf3da3dc4490d32e9"
+    },
+    "blocks": [
+      {
+        "source": "vision.d.ts",
+        "sha256": "79bdafb4a72eef6f3f609492fd1c0571bcb21d109e10aa2a43fb7bff95e64935",
+        "occurrences": 7
+      },
+      {
+        "source": "vision.d.ts",
+        "sha256": "dab84798947a4629aa2d54d7bdc8b2c38479238e721cd788549c4d74ede8826e",
+        "occurrences": 3
+      },
+      {
+        "source": "../../../../../../../mediapipe/tasks/web/vision/vision_js.js",
+        "sha256": "5bf9ade78d3fe775628eceb6360b9eff2a6d74bcb4b327fbfcd78d2ebc2bea4a",
+        "occurrences": 1
+      }
+    ]
+  },
+  {
+    "package": "@mediapipe/tasks-vision",
+    "version": "0.10.17",
+    "registry": "https://registry.npmjs.org/%40mediapipe%2Ftasks-vision/0.10.17",
+    "integrity": "sha512-CZWV/q6TTe8ta61cZXjfnnHsfWIdFhms03M9T7Cnd5y2mdpylJM0rF1qRq+wsQVRMLz1OYPVEBU9ph2Bx8cxrg==",
+    "source": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/e252e5667e2be398dcc4c5d49ca134248e2111c8/LICENSE",
+    "file": "@mediapipe--tasks-vision@0.10.17.LICENSE.NOTICE",
+    "sha256": "8707eef0533987efc5b155d64761eeb6e20793f50b9bd1a68dad1cf4719d0ed8",
+    "evidence": "Supplemental upstream Apache-2.0 text and original additional notices identical at the two bracketing tags. The locked npm declaration and headers identify the package license.",
+    "matchingUpstream": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/76e52c759f87e6e71f531dd785cd892ba163a454/LICENSE",
+    "tags": ["v0.10.15", "v0.10.18"]
+  },
+  {
+    "package": "react-remove-scroll-bar",
+    "version": "2.3.8",
+    "registry": "https://registry.npmjs.org/react-remove-scroll-bar/2.3.8",
+    "integrity": "sha512-9r+yi9+mgU33AKcj6IbT9oRCO78WriSj6t/cF8DWBZJ9aOGPOTEDvdUDz1FwKim7QXWwmHqtdHnRJfhAxEG46Q==",
+    "source": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/8ca9ba5ea52de03308fe8ced94f7b159a44d28ff/LICENSE",
+    "file": "react-remove-scroll-bar@2.3.8.LICENSE.NOTICE",
+    "sha256": "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84",
+    "evidence": "Supplemental upstream author license. All published files except package.json match version 2.3.7 byte for byte. Between the 2.3.7 release commit and the license source, only LICENSE differs.",
+    "releaseCompared": {
+      "name": "react-remove-scroll-bar",
+      "version": "2.3.7",
+      "registry": "https://registry.npmjs.org/react-remove-scroll-bar/2.3.7",
+      "tarball": "https://registry.npmjs.org/react-remove-scroll-bar/-/react-remove-scroll-bar-2.3.7.tgz",
+      "integrity": "sha512-UzA0npskGFA2bUqwWsSRJscuQEt7zyfVtMpCtBl/lk+k/ky6lzYImEks9jwgxTDe/B0tb5hyrYgbQv/JQaHjDw==",
+      "gitHead": "29e9fcd1eecf7d3b77a767941c4a57fe461fc1e4",
+      "license": "MIT"
+    },
+    "matchedFiles": {
+      "README.md": "486442209236ffa3893312e508694699a6b8834d30a2f9c083c1f3379983e4f9",
+      "constants/package.json": "9b557c166960d4a096abc83259b8787a4072516f666856f8cf51656e38ed904b",
+      "dist/es2015/component.d.ts": "8b9441c9166045f81e5000001f95521319692124baea142b228efdc370883736",
+      "dist/es2015/component.js": "3baec61523006aedf14321423427b0c50aa17bfe48faf344bebff9d883149f29",
+      "dist/es2015/constants.d.ts": "cd9dd3a7b0b95c3068f3b43b82da6dc6bee018f56d975b248d4bb6c484e61ed1",
+      "dist/es2015/constants.js": "1c73582ef730bbca1d536a6995c7eea438dcd0632fee2856337627e44b5872e2",
+      "dist/es2015/index.d.ts": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f",
+      "dist/es2015/index.js": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f",
+      "dist/es2015/utils.d.ts": "c4304c2114b48bb2778de565b4a0274ebbbbd71f6d7f5c57e116bd1656ea2c32",
+      "dist/es2015/utils.js": "2c4105ab772a5cbf4b3d1e54f49e94d03fde867d20767b46bb3e5c27f4d82f00",
+      "dist/es2019/component.d.ts": "8b9441c9166045f81e5000001f95521319692124baea142b228efdc370883736",
+      "dist/es2019/component.js": "ac214bb2783fdf743a0c949fef47784741db109dcc6f4426f46e77386dee1c8f",
+      "dist/es2019/constants.d.ts": "cd9dd3a7b0b95c3068f3b43b82da6dc6bee018f56d975b248d4bb6c484e61ed1",
+      "dist/es2019/constants.js": "f597b4036280caca4cc58d3476ffc02dc5c16564090229e6685e98b80a8e2a33",
+      "dist/es2019/index.d.ts": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f",
+      "dist/es2019/index.js": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f",
+      "dist/es2019/utils.d.ts": "c4304c2114b48bb2778de565b4a0274ebbbbd71f6d7f5c57e116bd1656ea2c32",
+      "dist/es2019/utils.js": "dafd773a756cca848d359153df92315235becb2ed8e10b1146458be4bfd38826",
+      "dist/es5/component.d.ts": "8b9441c9166045f81e5000001f95521319692124baea142b228efdc370883736",
+      "dist/es5/component.js": "d95ae68cda75b262f01b7c3eba3d530c6a24579778cbb3e320b2449348dabb13",
+      "dist/es5/constants.d.ts": "cd9dd3a7b0b95c3068f3b43b82da6dc6bee018f56d975b248d4bb6c484e61ed1",
+      "dist/es5/constants.js": "20bf238e562be0830b10b1813d36fa321e81cd07fd99b27724833132304b73bc",
+      "dist/es5/index.d.ts": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f",
+      "dist/es5/index.js": "0e1ab245d6b12ef80409b988b0f29b498c562b6cff6e7365714cb0c351914a12",
+      "dist/es5/utils.d.ts": "c4304c2114b48bb2778de565b4a0274ebbbbd71f6d7f5c57e116bd1656ea2c32",
+      "dist/es5/utils.js": "ee6c64e8690475db96ec1a1b2ede342ffdc45ccf739bd28dd6f86c8c9a5917c3"
+    }
+  }
+]

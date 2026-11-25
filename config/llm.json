@@ -9,6 +9,12 @@
       "credentialEnv": "DEEPSEEK_API_KEY",
       "timeoutMs": 60000,
       "maxRetries": 1,
+      "pricingCny": {
+        "inputPerMillion": 2,
+        "outputPerMillion": 8,
+        "sourceUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+        "checkedAt": "2026-09-30"
+      },
       "pricing": {
         "inputUsdPerMillion": 0.3,
         "outputUsdPerMillion": 1.2

@@ -154,7 +154,8 @@ export const updateChangeSchema = z.object({
   expectedRevision: z.number().int().optional()
 });
 
-/** Derive the global sort key from epoch order + in-epoch year (+ month). */
+/** Legacy numeric cursor encoding only. Not a complete date, not safe for Int
+ * storage over the schema's full domain. New versions use chronology projection. */
 export function deriveSortOrder(
   epochOrder: number | null,
   epochYear: number | null,

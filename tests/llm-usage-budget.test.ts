@@ -121,6 +121,20 @@ describe('operation-scoped LLM usage budget', () => {
     expect(runner).toHaveBeenCalledWith(input);
   });
 
+  it.each(budgetEnvNames)(
+    'does not interpret invalid %s as an unconfigured budget',
+    async (name) => {
+      process.env[name] = 'private-invalid-budget-sentinel';
+      const runner = vi.fn(async () => result(1, 1));
+      const guarded = withLlmUsageBudget(runner, 'test operation');
+
+      await expect(guarded(request(1))).rejects.toMatchObject({
+        code: 'llm_budget_config_invalid'
+      });
+      expect(runner).not.toHaveBeenCalled();
+    }
+  );
+
   it('returns a sanitized HTTP 429 for a budget rejection', async () => {
     const response = errorResponse(
       new LlmUsageBudgetError('answer evaluation', 'deepseek-official', 'private usage details')

@@ -5,12 +5,13 @@
  *   几何（横向溢出/文本裁切/元素越界）、可达性（按钮与链接可访问名/输入关联标签）、
  *   视觉证据（2D/WebGL 画布读像素证明真的画了东西）+ 关键交互（节点详情侧栏、ego 邻居、时间切片、弹窗）。
  *
- * 用法：node scripts/ui-acceptance.mjs [baseUrl]
- * 需要：服务已 build 并运行；先用 scripts/ui-shots.mjs 播种演示世界。
+ * 用法：node scripts/ui-acceptance.mjs [baseUrl] <worldId>
+ * 需要：服务已 build 并运行；worldId 使用 scripts/ui-shots.mjs 输出的本次 fixture ID。
  */
 import { chromium } from '@playwright/test';
 
 const BASE = process.argv[2] ?? 'http://localhost:4310';
+const WORLD_ID = process.argv[3] ?? process.env.WORLDLOOM_UI_WORLD_ID;
 const findings = [];
 let checks = 0;
 
@@ -109,14 +110,21 @@ async function auditPage(page, name, path, options = {}) {
       } catch { return { w: c.width, h: c.height, variance: -2, painted: 0, engine: 'error' }; }
     });
     const svgPaths = document.querySelectorAll('svg path, svg line, svg polyline').length;
-    const graphFallback = Boolean(document.querySelector('[data-graph-fallback="true"]'));
+    const fallbackElement = document.querySelector('[data-graph-fallback="true"]');
+    const graphFallback = Boolean(fallbackElement);
+    const fallbackStyle = fallbackElement ? getComputedStyle(fallbackElement) : null;
+    const fallbackColor = fallbackStyle?.backgroundColor ?? '';
+    const alphaMatch = /(?:\/|,)\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*\)$/.exec(fallbackColor);
+    const fallbackCompositedAlpha = fallbackStyle
+      ? (fallbackColor === 'transparent' ? 0 : alphaMatch ? Number(alphaMatch[1]) : 1) * Number(fallbackStyle.opacity)
+      : null;
     // 画布不得逃逸出容器（Reagraph 画布是 absolute; inset:0，容器必须定位）
     const canvasOverflow = [...document.querySelectorAll('canvas')].some((c) => {
       const parent = c.parentElement?.getBoundingClientRect();
       const self = c.getBoundingClientRect();
       return Boolean(parent && parent.height > 50 && self.height > parent.height + 8);
     });
-    return { language, docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, graphFallback, canvasOverflow };
+    return { language, docOverflow, clipped, offscreen: [...new Set(offscreen)], brokenImages, namelessButtons, namelessLinks, unlabeledInputs: labels, templateHits: [...new Set(templateHits)], canvasInfo, svgPaths, graphFallback, fallbackCompositedAlpha, canvasOverflow };
   });
 
   record(name, geometry.language === 'zh-CN' ? 'OK' : 'FAIL', '可访问性', `HTML lang=${geometry.language || '(empty)'}`);
@@ -135,6 +143,14 @@ async function auditPage(page, name, path, options = {}) {
     const engines = [...new Set(geometry.canvasInfo.map((c) => c.engine))].join('/');
     const detail = `canvas ${geometry.canvasInfo.length} 层（${engines}），实际绘制 ${drawn.length} 层${geometry.graphFallback ? '；SVG 兼容渲染已启用' : ''}`;
     record(name, drawn.length || geometry.graphFallback ? 'OK' : 'FAIL', '视觉证据', detail);
+    if (geometry.graphFallback) {
+      record(
+        name,
+        geometry.fallbackCompositedAlpha >= 0.999 ? 'OK' : 'FAIL',
+        '视觉证据',
+        `SVG 兼容层不透明度 ${geometry.fallbackCompositedAlpha}`
+      );
+    }
   }
   if (options.expectSvg) {
     record(name, geometry.svgPaths > 0 ? 'OK' : 'FAIL', '视觉证据', `SVG 图元 ${geometry.svgPaths} 个`);
@@ -145,9 +161,11 @@ async function auditPage(page, name, path, options = {}) {
 }
 
 async function main() {
-  const list = await (await fetch(`${BASE}/api/worlds`)).json();
-  const world = (list.worlds ?? []).find((w) => w.name.startsWith('验收世界'));
-  if (!world) throw new Error('未找到验收演示世界，请先运行 node scripts/ui-shots.mjs');
+  if (!WORLD_ID) throw new Error('必须传入本次 ui-shots 输出的 worldId，避免误用其他数据');
+  const worldResponse = await fetch(`${BASE}/api/worlds/${WORLD_ID}`);
+  if (!worldResponse.ok) throw new Error(`指定的验收世界不存在：HTTP ${worldResponse.status}`);
+  const world = (await worldResponse.json()).world;
+  if (!world?.id) throw new Error('指定的验收世界响应无效');
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });

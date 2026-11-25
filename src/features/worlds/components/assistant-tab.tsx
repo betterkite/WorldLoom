@@ -18,7 +18,13 @@ interface AskResponse {
     mode: string;
     hits: number;
     rewritten: string | null;
-    semantic: { indexed: number; expected: number; coverage: number; fresh: boolean };
+    semantic: {
+      indexed: number;
+      expected: number;
+      coverage: number;
+      fresh: boolean;
+      reason?: string | null;
+    };
   };
 }
 
@@ -94,6 +100,20 @@ export function AssistantTab({ worldId }: { worldId: string }) {
                 </span>
               )}
             </div>
+            {['stale_index', 'embedding_space_mismatch'].includes(
+              entry.retrieval.semantic.reason ?? ''
+            ) && (
+              <p className='text-xs text-muted-foreground'>
+                索引内容或模型已变化，本次使用词法检索。可在{' '}
+                <a className='underline' href={`/dashboard/worlds/${worldId}/ops`}>
+                  运行概览
+                </a>{' '}
+                中手动重建语义索引。
+              </p>
+            )}
+            {entry.retrieval.semantic.reason === 'embedding_error' && (
+              <p className='text-xs text-muted-foreground'>向量服务暂不可用，本次使用词法检索。</p>
+            )}
             <p className='whitespace-pre-wrap text-sm leading-relaxed'>{entry.answer}</p>
             <div className='flex flex-wrap items-center gap-1.5'>
               {entry.citations.map((citation) => (

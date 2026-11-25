@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/docker/migrate/node_modules/
 /.pnp
 .pnp.js
 package-lock.json
@@ -44,6 +45,8 @@ next-env.d.ts
 /memory-bank
 
 # WorldLoom runtime artifacts
+/artifacts/
+/.codex/
 *.cleanup-backup
 .prisma-cache/
 .cache/

@@ -74,6 +74,12 @@
   },
   "overrides": [
     {
+      "files": ["packages/client-only/index.cjs"],
+      "rules": {
+        "unicorn/no-empty-file": "off"
+      }
+    },
+    {
       "files": [
         "**/*.ts",
         "**/*.tsx",

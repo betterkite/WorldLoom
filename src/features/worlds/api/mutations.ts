@@ -21,12 +21,12 @@ import { worldKeys } from './queries';
 
 const invalidateWorld = (worldId: string) => {
   const client = getQueryClient();
-  void client.invalidateQueries({ queryKey: worldKeys.detail(worldId) });
-  void client.invalidateQueries({ queryKey: worldKeys.entities(worldId) });
-  void client.invalidateQueries({ queryKey: worldKeys.events(worldId) });
-  void client.invalidateQueries({ queryKey: worldKeys.epochs(worldId) });
-  void client.invalidateQueries({ queryKey: worldKeys.changes(worldId) });
-  void client.invalidateQueries({ queryKey: worldKeys.versions(worldId) });
+  // All current-version views (including detailed review, graph and timeline)
+  // share this world's scope; the header uses the separate detail key.
+  return Promise.all([
+    client.invalidateQueries({ queryKey: worldKeys.detail(worldId) }),
+    client.invalidateQueries({ queryKey: worldKeys.scope(worldId) })
+  ]);
 };
 
 export const createWorldMutation = mutationOptions({
@@ -73,19 +73,21 @@ export const mergeWorldMutation = (worldId: string) =>
     mutationFn: (summary?: string) => mergeWorld(worldId, summary),
     // 注意：组件常以 {...mergeWorldMutation(worldId), onSuccess: toast} 覆盖回调，
     // 因此集中失效必须挂在 onSettled（不会被覆盖）——否则列表在合并后保持陈旧。
-    onSettled: () => {
-      invalidateWorld(worldId);
-      getQueryClient().invalidateQueries({ queryKey: worldKeys.list() });
-    }
+    onSettled: () =>
+      Promise.all([
+        invalidateWorld(worldId),
+        getQueryClient().invalidateQueries({ queryKey: worldKeys.list() })
+      ])
   });
 
 export const rollbackVersionMutation = (worldId: string) =>
   mutationOptions({
     mutationFn: (version: number) => rollbackVersion(worldId, version),
-    onSettled: () => {
-      invalidateWorld(worldId);
-      getQueryClient().invalidateQueries({ queryKey: worldKeys.list() });
-    }
+    onSettled: () =>
+      Promise.all([
+        invalidateWorld(worldId),
+        getQueryClient().invalidateQueries({ queryKey: worldKeys.list() })
+      ])
   });
 
 const invalidateSources = (worldId: string) => {

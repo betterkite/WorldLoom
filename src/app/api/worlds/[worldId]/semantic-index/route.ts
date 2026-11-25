@@ -4,8 +4,7 @@ import {
   getSemanticIndexJob,
   getSemanticIndexStatus,
   indexWorldSemantic,
-  runSemanticIndexJob,
-  SEMANTIC_JOB_STALE_MS
+  runSemanticIndexJob
 } from '@/lib/retrieval/search';
 import { errorResponse } from '@/lib/api';
 import { EmbeddingError, embeddingConfigSummary } from '@/lib/llm/embeddings';
@@ -16,17 +15,9 @@ export async function GET(_request: Request, { params }: Params) {
   try {
     const { worldId } = await params;
     const semantic = await getSemanticIndexStatus(worldId);
-    const job =
-      (await getSemanticIndexJob(worldId, semantic.version)) ??
-      (semantic.fresh ? null : await enqueueSemanticIndex(worldId, semantic.version));
-    const resumable =
-      job?.status === 'queued' ||
-      (job?.status === 'running' &&
-        Date.now() - (job.lastHeartbeatAt?.getTime() ?? 0) >= SEMANTIC_JOB_STALE_MS);
-    if (resumable && process.env.NODE_ENV !== 'test') {
-      void runSemanticIndexJob(job.id);
-    }
-    return NextResponse.json({ semantic, job });
+    // Reading stale/legacy metadata must not start expensive model inference.
+    const job = await getSemanticIndexJob(worldId, semantic.version);
+    return NextResponse.json({ semantic, job }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     return errorResponse(error);
   }

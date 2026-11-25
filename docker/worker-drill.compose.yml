@@ -1,0 +1,44 @@
+# Disposable local-model drill ONLY. See docs/WORKER_DRILL.md.
+# No fixed container names, user database, persistent data volume, or provider credentials.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: worldloom_drill
+      POSTGRES_PASSWORD: disposable-local-only
+      POSTGRES_DB: ${WORLDLOOM_DRILL_DATABASE:?explicit disposable database required}
+    labels:
+      io.worldloom.disposable-drill: ${WORLDLOOM_DRILL_PROJECT:?explicit disposable project required}
+    ports:
+      - '127.0.0.1::5432'
+    tmpfs:
+      - /var/lib/postgresql/data:rw,nosuid,size=1g
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U worldloom_drill -d $$POSTGRES_DB']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: 'no'
+
+  worker:
+    image: ${WORLDLOOM_DRILL_IMAGE:?explicit prebuilt candidate image required}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://worldloom_drill:disposable-local-only@db:5432/${WORLDLOOM_DRILL_DATABASE}
+      WORLDLOOM_WORKER: 'true'
+      WORLDLOOM_WORKER_MAX_CONCURRENCY: '1'
+      DEEPSEEK_API_KEY: ''
+      EMBEDDINGS_API_KEY: ''
+    labels:
+      io.worldloom.disposable-drill: ${WORLDLOOM_DRILL_PROJECT}
+    volumes:
+      - ${WORLDLOOM_DRILL_MODEL_CACHE:?explicit cached local model required}:/app/.cache/worldloom-embeddings:ro
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+    restart: 'no'

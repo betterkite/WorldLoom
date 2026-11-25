@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/db/client';
+import { GovernanceError } from '@/lib/governance/changes';
 import { getRelationsAt } from '@/lib/worldbuilding/relations';
+import { CHRONOLOGY_FORMAT, createChronology } from '@/lib/worldbuilding/chronology';
 import { computeRelatedEdges } from '@/lib/graph/relevance';
 import { louvain } from '@/lib/graph/louvain';
 
@@ -25,7 +27,10 @@ export interface WorldGraph {
     target: string;
     relation: string;
     polarity: string;
-    active: boolean;
+    active: boolean | null;
+    ambiguous: boolean;
+    sourceEventUids: (string | null)[];
+    sourceRelationUids: string[];
   }[];
   relatedEdges: {
     source: string;
@@ -36,10 +41,31 @@ export interface WorldGraph {
   communities: { id: number; members: number }[];
 }
 
-export async function getWorldGraph(worldId: string): Promise<WorldGraph> {
+type GraphVersionOptions = { version?: number | string | null };
+
+function relationKey(subject: string, object: string, relation: string): string {
+  return JSON.stringify([subject, object, relation]);
+}
+
+async function resolveGraphVersion(worldId: string, requested: GraphVersionOptions['version']) {
   const world = await prisma.world.findUnique({ where: { id: worldId } });
   if (!world) throw new Error(`World not found: ${worldId}`);
-  const v = world.masterVersion;
+  const version = requested == null || requested === '' ? world.masterVersion : Number(requested);
+  if (!Number.isSafeInteger(version) || version < 1) {
+    throw new GovernanceError('version_not_found', 'Invalid version');
+  }
+  const snapshot = await prisma.worldVersion.findUnique({
+    where: { worldId_version: { worldId, version } }
+  });
+  if (!snapshot) throw new GovernanceError('version_not_found', 'Version not found');
+  return version;
+}
+
+export async function getWorldGraph(
+  worldId: string,
+  options: GraphVersionOptions = {}
+): Promise<WorldGraph> {
+  const v = await resolveGraphVersion(worldId, options.version);
 
   const [entities, events, edges, relations, qaRecords] = await Promise.all([
     prisma.entity.findMany({ where: { worldId, version: v } }),
@@ -48,7 +74,7 @@ export async function getWorldGraph(worldId: string): Promise<WorldGraph> {
       select: { uid: true, participantUids: true }
     }),
     prisma.eventEdge.findMany({ where: { worldId, version: v } }),
-    prisma.relationshipEvent.findMany({ where: { worldId, version: v } }),
+    getRelationsAt(worldId, { version: v }),
     prisma.qaRecord.findMany({ where: { worldId }, select: { citations: true } })
   ]);
 
@@ -115,12 +141,15 @@ export async function getWorldGraph(worldId: string): Promise<WorldGraph> {
     degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
     degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
   }
-  const relationEdgeViews = relations.map((relation) => ({
+  const relationEdgeViews = relations.edges.map((relation) => ({
     source: relation.subjectUid,
     target: relation.objectUid,
     relation: relation.relation,
     polarity: relation.polarity,
-    active: relation.polarity !== 'terminate'
+    active: relation.active,
+    ambiguous: relation.ambiguous,
+    sourceEventUids: relation.sourceEventUids,
+    sourceRelationUids: relation.sourceRelationUids
   }));
 
   return {
@@ -148,19 +177,17 @@ export async function getWorldGraph(worldId: string): Promise<WorldGraph> {
 /**
  * ISS-18 图谱分图：view=relations（人物关系，边标注事件与地点）/ view=events（事件因果）。
  * options.asOf = 锚点事件 uid：按关系时间切片（getRelationsAt 折叠语义）为每条边
- * 标注该时刻的状态 stateAt ∈ active | ended | future（B-5 时间切片着色）。
+ * 标注该时刻的状态 stateAt ∈ active | ended | future | uncertain。
  */
 export async function getFocusGraph(
   worldId: string,
   view: 'relations' | 'events',
-  options: { asOf?: string | null } = {}
+  options: GraphVersionOptions & { asOf?: string | null } = {}
 ) {
-  const world = await prisma.world.findUnique({ where: { id: worldId } });
-  if (!world) throw new Error(`World not found: ${worldId}`);
-  const v = world.masterVersion;
+  const v = await resolveGraphVersion(worldId, options.version);
 
   if (view === 'relations') {
-    const [entities, relations, events] = await Promise.all([
+    const [entities, relations, events, epochs, slice] = await Promise.all([
       prisma.entity.findMany({
         where: { worldId, version: v },
         select: { uid: true, name: true, kind: true }
@@ -168,12 +195,29 @@ export async function getFocusGraph(
       prisma.relationshipEvent.findMany({ where: { worldId, version: v } }),
       prisma.chronicleEvent.findMany({
         where: { worldId, version: v },
-        select: { uid: true, title: true, locationUid: true, sortOrder: true }
-      })
+        select: {
+          uid: true,
+          title: true,
+          locationUid: true,
+          sortOrder: true,
+          epochUid: true,
+          epochYear: true,
+          epochMonth: true,
+          epochDay: true,
+          fictionPrecision: true
+        }
+      }),
+      prisma.epoch.findMany({ where: { worldId, version: v }, select: { uid: true, order: true } }),
+      getRelationsAt(worldId, { version: v, atEventUid: options.asOf })
     ]);
     const entityKind = new Map(entities.map((e) => [e.uid, e.kind]));
     const nameOf = new Map(entities.map((e) => [e.uid, e.name]));
-    const eventByUid = new Map(events.map((e) => [e.uid, e]));
+    const chronology = createChronology(events, epochs);
+    const eventByUid = chronology.byUid;
+    const anchor = options.asOf ? eventByUid.get(options.asOf) : null;
+    const folded = new Map(
+      slice.edges.map((edge) => [relationKey(edge.subjectUid, edge.objectUid, edge.relation), edge])
+    );
     // 只保留"人物/组织/势力"这类有能动性的节点
     const nodeKinds = new Set(['character', 'organization', 'faction', 'species']);
     const nodeUids = new Set<string>();
@@ -187,7 +231,10 @@ export async function getFocusGraph(
       eventTitle: string | null;
       locationName: string | null;
       sortOrder: number;
-      stateAt?: 'active' | 'ended' | 'future';
+      chronologyPosition: number | null;
+      stateAt: 'active' | 'ended' | 'future' | 'uncertain';
+      sourceEventUids: (string | null)[];
+      sourceRelationUids: string[];
     }[] = relations
       .filter(
         (r) =>
@@ -196,6 +243,25 @@ export async function getFocusGraph(
       )
       .map((r) => {
         const event = r.eventUid ? eventByUid.get(r.eventUid) : null;
+        const state = folded.get(relationKey(r.subjectUid, r.objectUid, r.relation));
+        let membership: 'included' | 'future' | 'uncertain' = 'included';
+        if (r.eventUid && !event) membership = 'uncertain';
+        else if (options.asOf) {
+          membership = !anchor
+            ? 'uncertain'
+            : event
+              ? chronology.atAnchor(event, anchor)
+              : 'included';
+        }
+        const stateAt: 'active' | 'ended' | 'future' | 'uncertain' =
+          membership === 'future'
+            ? 'future'
+            : membership === 'uncertain' || !state || state.ambiguous || state.active === null
+              ? 'uncertain'
+              : state.active
+                ? 'active'
+                : 'ended';
+        const sources = membership === 'future' ? undefined : state;
         nodeUids.add(r.subjectUid);
         nodeUids.add(r.objectUid);
         return {
@@ -203,46 +269,35 @@ export async function getFocusGraph(
           source: r.subjectUid,
           target: r.objectUid,
           relation: r.relation,
+          // Label the recorded action; stateAt describes its state at the selected time.
           label: r.polarity === 'terminate' ? `${r.relation}·终止` : r.relation,
           polarity: r.polarity,
           eventTitle: event?.title ?? null,
           locationName: event?.locationUid ? (nameOf.get(event.locationUid) ?? null) : null,
-          sortOrder: event?.sortOrder ?? -1
+          sortOrder: event?.sortOrder ?? -1,
+          chronologyPosition: event?.chronologyPosition ?? (r.eventUid ? null : 0),
+          stateAt,
+          sourceEventUids: sources?.sourceEventUids ?? [r.eventUid],
+          sourceRelationUids: sources?.sourceRelationUids ?? [r.uid]
         };
       })
-      .toSorted((a, b) => a.sortOrder - b.sortOrder);
-
-    // B-5 时间切片着色：asOf 时刻的关系折叠态（active/ended/future）
-    let asOfInfo: { eventUid: string | null; title: string | null } | null = null;
-    if (options.asOf) {
-      const slice = await getRelationsAt(worldId, { atEventUid: options.asOf });
-      asOfInfo = { eventUid: slice.asOf.eventUid, title: slice.asOf.title };
-      const threshold = slice.asOf.sortOrder ?? Number.POSITIVE_INFINITY;
-      const activeKeys = new Set(
-        slice.edges
-          .filter((e) => e.active)
-          .map((e) => `${e.subjectUid}|${e.objectUid}|${e.relation}`)
+      .toSorted(
+        (a, b) =>
+          (a.chronologyPosition ?? Number.MAX_SAFE_INTEGER) -
+            (b.chronologyPosition ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id)
       );
-      for (const edge of edges) {
-        if (edge.sortOrder > threshold) {
-          edge.stateAt = 'future';
-        } else {
-          const key = `${edge.source}|${edge.target}|${edge.relation}`;
-          edge.stateAt = activeKeys.has(key) ? 'active' : 'ended';
-        }
-      }
-    } else {
-      for (const edge of edges) edge.stateAt = edge.polarity === 'terminate' ? 'ended' : 'active';
-    }
 
     return {
       view,
       version: v,
-      asOf: asOfInfo,
-      anchorEvents: events
-        .slice()
-        .toSorted((a, b) => a.sortOrder - b.sortOrder)
-        .map((e) => ({ uid: e.uid, title: e.title, sortOrder: e.sortOrder })),
+      ordering: slice.ordering,
+      asOf: options.asOf ? slice.asOf : null,
+      anchorEvents: chronology.events.map((e) => ({
+        uid: e.uid,
+        title: e.title,
+        sortOrder: e.sortOrder,
+        chronologyPosition: e.chronologyPosition
+      })),
       nodes: entities
         .filter((e) => nodeUids.has(e.uid))
         .map((e) => ({ uid: e.uid, name: e.name, kind: e.kind })),
@@ -250,11 +305,12 @@ export async function getFocusGraph(
     };
   }
 
-  const events = await prisma.chronicleEvent.findMany({
-    where: { worldId, version: v },
-    orderBy: { sortOrder: 'asc' }
-  });
-  const edges = await prisma.eventEdge.findMany({ where: { worldId, version: v } });
+  const [events, epochs, edges] = await Promise.all([
+    prisma.chronicleEvent.findMany({ where: { worldId, version: v } }),
+    prisma.epoch.findMany({ where: { worldId, version: v } }),
+    prisma.eventEdge.findMany({ where: { worldId, version: v } })
+  ]);
+  const chronology = createChronology(events, epochs);
   const inGraph = new Set<string>();
   for (const edge of edges) {
     inGraph.add(edge.causeUid);
@@ -263,7 +319,8 @@ export async function getFocusGraph(
   return {
     view,
     version: v,
-    nodes: events
+    ordering: CHRONOLOGY_FORMAT,
+    nodes: chronology.events
       .filter((e) => inGraph.has(e.uid))
       .map((e) => ({ uid: e.uid, name: e.title, kind: 'event', year: e.epochYear })),
     edges: edges.map((edge, index) => ({

@@ -178,6 +178,19 @@ function compileCallMeta(result: ChatResult): CompileCallMeta {
  */
 export const COMPILE_CHUNK_LIMIT = 1_000;
 
+/** Opt-in larger chunks for measured long-document tests; existing runs keep
+ * their persisted boundaries. Default stays conservative until quality passes.
+ */
+export function getCompileChunkLimit(env: Record<string, string | undefined> = process.env) {
+  const raw = env.WORLDLOOM_COMPILE_CHUNK_SIZE;
+  if (raw === undefined) return COMPILE_CHUNK_LIMIT;
+  const value = Number(raw);
+  if (!/^[0-9]+$/.test(raw) || !Number.isInteger(value) || value < 1_000 || value > 8_000) {
+    throw new Error('WORLDLOOM_COMPILE_CHUNK_SIZE must be an integer from 1000 to 8000');
+  }
+  return value;
+}
+
 /** 按句末边界切成小块，任何字符都不能在切分过程中丢失。 */
 export function splitForCompile(content: string, limit = COMPILE_CHUNK_LIMIT): string[] {
   if (content.length <= limit) return [content];

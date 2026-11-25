@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GraphCanvas, type GraphEdge, type GraphNode, type LayoutTypes } from 'reagraph';
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { graphQueryOptions } from '../api/queries';
+import { graphQueryOptions, worldQueryOptions } from '../api/queries';
+import { fetchFocusGraph, type GraphData } from '../api/service';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { collapseGraphCommunities, findShortestGraphPath } from '@/lib/graph/view';
@@ -15,49 +16,14 @@ import Link from 'next/link';
  * - 节点按类型着色定尺寸；边分关系/因果/相关三类（虚线=推断相关）
  * - 点击节点 → 右侧详情侧边栏（摘要、关系、跳转条目页）
  * - 布局可切换：力导向/环形/同心圆/层次/放射/无重叠铺开；WebGL 自动适配画布
- * - 时间切片：按锚点事件折叠关系状态（有效/已终结/尚未发生）
+ * - 时间切片：按锚点事件折叠关系状态（有效/已终结/尚未发生/不确定）
  */
 
 type GraphView = 'relations' | 'events' | 'overview';
-type EdgeState = 'active' | 'ended' | 'future';
+type EdgeState = 'active' | 'ended' | 'future' | 'uncertain';
 type EdgeKind = 'relation' | 'causal' | 'related';
 
-type FocusGraph = {
-  view: string;
-  asOf: { eventUid: string | null; title: string | null } | null;
-  anchorEvents?: { uid: string; title: string; sortOrder: number }[];
-  nodes: { uid: string; name: string; kind: string }[];
-  edges: {
-    id: string;
-    source: string;
-    target: string;
-    label: string;
-    polarity: string;
-    eventTitle: string | null;
-    locationName: string | null;
-    stateAt?: EdgeState;
-  }[];
-};
-
-type OverviewGraph = {
-  nodes: {
-    uid: string;
-    name: string;
-    kind: string;
-    community: number;
-    degree: number;
-    queryHits: number;
-  }[];
-  relationEdges: {
-    source: string;
-    target: string;
-    relation: string;
-    polarity: string;
-    active: boolean;
-  }[];
-  relatedEdges: { source: string; target: string; weight: number }[];
-  communities: { id: number; members: number }[];
-};
+type OverviewGraph = GraphData;
 
 type EntityDetail = {
   entity: {
@@ -100,9 +66,10 @@ const EDGE_META: Record<EdgeKind, { label: string; color: string; dashed: boolea
 };
 
 const EDGE_STATE_META: Record<EdgeState, { color: string; dashed: boolean; label: string }> = {
-  active: { color: '#6366f1', dashed: false, label: '该时刻有效' },
-  ended: { color: '#94a3b8', dashed: true, label: '该时刻前已终结' },
-  future: { color: '#cbd5e1', dashed: true, label: '该时刻之后才发生' }
+  active: { color: '#6366f1', dashed: false, label: '有效' },
+  ended: { color: '#94a3b8', dashed: true, label: '已终止' },
+  future: { color: '#cbd5e1', dashed: true, label: '所选时刻之后才发生' },
+  uncertain: { color: '#d97706', dashed: true, label: '状态不确定' }
 };
 
 const VIEW_LABEL: Record<GraphView, string> = {
@@ -129,13 +96,20 @@ type ViewEdge = {
   stateAt?: EdgeState;
   eventTitle?: string | null;
   locationName?: string | null;
+  sourceEventUids?: (string | null)[];
+  sourceRelationUids?: string[];
 };
 
 type FallbackPoint = { x: number; y: number };
 
-export function GraphTab({ worldId }: { worldId: string }) {
+export function GraphTab({ worldId, version }: { worldId: string; version?: number }) {
+  const { data: currentWorld } = useSuspenseQuery(worldQueryOptions(worldId));
+  const effectiveVersion = version ?? currentWorld.world.masterVersion;
   const [view, setView] = useState<GraphView>('relations');
-  const [asOfUid, setAsOfUid] = useState('');
+  const [asOf, setAsOf] = useState<{ worldId: string; uid: string; version: number } | null>(null);
+  const selectedAnchor =
+    asOf?.worldId === worldId && asOf.version === effectiveVersion ? asOf : null;
+  const asOfUid = selectedAnchor?.uid ?? '';
   const [showRelated, setShowRelated] = useState(true);
   const [showIsolated, setShowIsolated] = useState(false);
   const [kindFilter, setKindFilter] = useState('all');
@@ -149,25 +123,25 @@ export function GraphTab({ worldId }: { worldId: string }) {
   const [webglPaintedKey, setWebglPaintedKey] = useState<string | null>(null);
   const graphViewportRef = useRef<HTMLDivElement>(null);
 
+  const { data: overview } = useSuspenseQuery(graphQueryOptions(worldId, effectiveVersion));
   const focus = useQuery({
-    queryKey: ['focus-graph', worldId, view, asOfUid],
-    queryFn: async () => {
-      const asOfQuery =
-        view === 'relations' && asOfUid ? `&asOf=${encodeURIComponent(asOfUid)}` : '';
-      const response = await fetch(`/api/worlds/${worldId}/graph?view=${view}${asOfQuery}`);
-      if (!response.ok) throw new Error('图谱加载失败');
-      return (await response.json()) as FocusGraph;
-    },
+    queryKey: ['focus-graph', worldId, view, asOfUid, overview.version],
+    queryFn: () =>
+      fetchFocusGraph(worldId, view === 'events' ? 'events' : 'relations', {
+        asOf: view === 'relations' ? asOfUid : null,
+        version: overview.version
+      }),
     enabled: view !== 'overview'
   });
-  const { data: overview } = useSuspenseQuery(graphQueryOptions(worldId));
 
   const overviewView = overview as unknown as OverviewGraph;
 
   const detail = useQuery({
-    queryKey: ['entity-detail', worldId, selectedUid],
+    queryKey: ['entity-detail', worldId, selectedUid, overview.version],
     queryFn: async () => {
-      const response = await fetch(`/api/worlds/${worldId}/entities/${selectedUid}`);
+      const response = await fetch(
+        `/api/worlds/${worldId}/entities/${selectedUid}?version=${overview.version}`
+      );
       if (!response.ok) throw new Error('条目加载失败');
       return (await response.json()) as EntityDetail;
     },
@@ -210,12 +184,22 @@ export function GraphTab({ worldId }: { worldId: string }) {
         });
       }
       overviewView.relationEdges.forEach((edge, index) => {
+        const stateAt: EdgeState =
+          edge.ambiguous || edge.active === null ? 'uncertain' : edge.active ? 'active' : 'ended';
         edges.push({
           id: `rel_${index}`,
           source: edge.source,
           target: edge.target,
           kind: 'relation',
-          label: edge.active ? edge.relation : `${edge.relation}·终止`
+          label:
+            stateAt === 'uncertain'
+              ? `${edge.relation}·不确定`
+              : stateAt === 'ended'
+                ? `${edge.relation}·终止`
+                : edge.relation,
+          stateAt,
+          sourceEventUids: edge.sourceEventUids,
+          sourceRelationUids: edge.sourceRelationUids
         });
       });
       if (showRelated) {
@@ -251,14 +235,16 @@ export function GraphTab({ worldId }: { worldId: string }) {
           target: edge.target,
           kind: effectiveView === 'events' ? 'causal' : 'relation',
           label:
-            effectiveView === 'events'
+            effectiveView === 'events' || edge.stateAt === 'uncertain'
               ? edge.label
               : [edge.label, POLARITY_CN[edge.polarity] ?? edge.polarity]
                   .filter(Boolean)
                   .join(' · '),
           stateAt: edge.stateAt,
           eventTitle: edge.eventTitle,
-          locationName: edge.locationName
+          locationName: edge.locationName,
+          sourceEventUids: edge.sourceEventUids,
+          sourceRelationUids: edge.sourceRelationUids
         });
       }
     }
@@ -273,7 +259,13 @@ export function GraphTab({ worldId }: { worldId: string }) {
     );
 
     if (effectiveView === 'overview' && collapseCommunities) {
-      const collapsed = collapseGraphCommunities(filteredNodes, graphEdgesForView);
+      // The collapsed representative must not hide an uncertain relationship.
+      const collapsed = collapseGraphCommunities(
+        filteredNodes,
+        graphEdgesForView.toSorted(
+          (a, b) => Number(b.stateAt === 'uncertain') - Number(a.stateAt === 'uncertain')
+        )
+      );
       graphNodesForView = collapsed.nodes;
       graphEdgesForView = collapsed.edges.map((edge) => ({
         ...edge,
@@ -326,7 +318,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
         label: edge.label || undefined,
         fill: state?.color ?? EDGE_META[edge.kind].color,
         dashed: state?.dashed ?? EDGE_META[edge.kind].dashed,
-        data: { kind: edge.kind }
+        data: { kind: edge.kind, stateAt: edge.stateAt }
       };
     });
 
@@ -372,7 +364,9 @@ export function GraphTab({ worldId }: { worldId: string }) {
   const renderedGraphEdges = useMemo(() => {
     if (!graphPath) return model.graphEdges;
     return model.graphEdges.map((edge) =>
-      pathEdgeIds.has(edge.id) ? { ...edge, fill: '#0f766e', dashed: false } : edge
+      pathEdgeIds.has(edge.id) && edge.data?.stateAt !== 'uncertain'
+        ? { ...edge, fill: '#0f766e' }
+        : edge
     );
   }, [graphPath, model.graphEdges, pathEdgeIds]);
 
@@ -456,13 +450,16 @@ export function GraphTab({ worldId }: { worldId: string }) {
   );
   const nameOf = (uid: string) => model.nodes.find((node) => node.id === uid)?.label ?? uid;
   const presentKinds = availableKinds;
-  const slicing = effectiveView === 'relations' && Boolean(focus.data?.asOf);
+  const sourceEventName = (uid: string | null) =>
+    uid === null
+      ? '基础关系（无锚点）'
+      : (focus.data?.anchorEvents?.find((event) => event.uid === uid)?.title ?? `事件 ${uid}`);
 
   const switchView = (next: GraphView) => {
     setView(next);
     setSelectedUid(null);
     setEgoUid(null);
-    setAsOfUid('');
+    setAsOf(null);
   };
 
   return (
@@ -536,7 +533,17 @@ export function GraphTab({ worldId }: { worldId: string }) {
               <select
                 className='h-7 rounded-md border bg-background px-2 text-xs'
                 value={asOfUid}
-                onChange={(event) => setAsOfUid(event.target.value)}
+                onChange={(event) =>
+                  setAsOf(
+                    event.target.value
+                      ? {
+                          worldId,
+                          uid: event.target.value,
+                          version: focus.data?.version ?? overview.version
+                        }
+                      : null
+                  )
+                }
               >
                 <option value=''>当前</option>
                 {(focus.data?.anchorEvents ?? []).map((event) => (
@@ -654,7 +661,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
               {EDGE_META.related.label}
             </span>
           )}
-          {slicing &&
+          {model.edges.some((edge) => edge.stateAt) &&
             (Object.keys(EDGE_STATE_META) as EdgeState[]).map((state) => (
               <span key={state} className='inline-flex items-center gap-1'>
                 <span
@@ -670,7 +677,11 @@ export function GraphTab({ worldId }: { worldId: string }) {
         </div>
 
         {/* WebGL 画布 */}
-        {model.graphNodes.length === 0 ? (
+        {effectiveView !== 'overview' && focus.isError ? (
+          <p role='alert' className='py-8 text-sm text-destructive'>
+            {focus.error.message}
+          </p>
+        ) : model.graphNodes.length === 0 ? (
           <p className='py-16 text-center text-sm text-muted-foreground'>
             {effectiveView === 'events'
               ? '还没有因果边。编译或手工记录事件时建立 cause → effect 关系即可。'
@@ -711,7 +722,7 @@ export function GraphTab({ worldId }: { worldId: string }) {
             {webglPaintedKey !== graphRenderKey && (
               <div
                 data-graph-fallback='true'
-                className='absolute inset-0 bg-background/95'
+                className='absolute inset-0 bg-background'
                 aria-label='图谱兼容渲染'
               >
                 <svg
@@ -829,7 +840,10 @@ export function GraphTab({ worldId }: { worldId: string }) {
                 <strong>{nameOf(edge.source)}</strong>
                 <span className='text-muted-foreground'>
                   —{edge.label}
-                  {POLARITY_CN[edge.polarity] ? `（${POLARITY_CN[edge.polarity]}）` : ''}→
+                  {edge.stateAt !== 'uncertain' && POLARITY_CN[edge.polarity]
+                    ? `（${POLARITY_CN[edge.polarity]}）`
+                    : ''}
+                  →
                 </span>
                 <strong>{nameOf(edge.target)}</strong>
                 {edge.eventTitle && (
@@ -841,10 +855,16 @@ export function GraphTab({ worldId }: { worldId: string }) {
                   <Badge
                     variant='outline'
                     className='text-[10px]'
-                    style={edge.stateAt !== 'active' ? { opacity: 0.65 } : undefined}
+                    style={{ color: EDGE_STATE_META[edge.stateAt].color }}
                   >
                     {EDGE_STATE_META[edge.stateAt].label}
                   </Badge>
+                )}
+                {edge.stateAt === 'uncertain' && (
+                  <span className='w-full break-all text-muted-foreground'>
+                    来源事件：{edge.sourceEventUids?.map(sourceEventName).join('、') || '未知'}；
+                    来源关系：{edge.sourceRelationUids?.join('、') || '未知'}
+                  </span>
                 )}
               </button>
             ))}
@@ -986,6 +1006,12 @@ export function GraphTab({ worldId }: { worldId: string }) {
                     <Badge variant='outline' className='text-[10px]'>
                       {EDGE_STATE_META[edge.stateAt].label}
                     </Badge>
+                  )}
+                  {edge.stateAt === 'uncertain' && (
+                    <span className='w-full break-all'>
+                      来源事件：{edge.sourceEventUids?.map(sourceEventName).join('、') || '未知'}；
+                      来源关系：{edge.sourceRelationUids?.join('、') || '未知'}
+                    </span>
                   )}
                 </div>
               ))}

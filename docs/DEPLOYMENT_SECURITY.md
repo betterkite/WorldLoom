@@ -2,6 +2,10 @@
 
 本文档是正式发布前的部署门禁。WorldLoom 当前提供的是**本地/受控主机应用**，不是开箱即用的公网多租户服务；`docker compose` 的默认端口只绑定回环地址，不能直接改成公网监听后上线。
 
+2026-10-01 本机单人首发按用户范围使用独立 [LOCAL_DEPLOYMENT.md](./LOCAL_DEPLOYMENT.md)
+适用性预检和运行证据；公网/对外控制记 N/A 而非伪造通过。本文件的 strict 生产契约保持
+不变，不把普通开发模式称为本机发布门槛。新本机预检与启动边界改动仅补入源码，尚未验证。
+
 ## 必须满足的边界
 
 ### 1. 网关认证与网络隔离
@@ -30,10 +34,15 @@
 
 1. 凭据只通过 secret manager/运行时环境注入，不写入镜像、仓库、日志或导出文件。
 2. 发布前备份 PostgreSQL，并在单独维护窗口执行 `pnpm db:deploy`；禁止用 `db:push` 代替迁移。
-3. 先启动数据库并确认迁移与 `/api/health`，再切换应用流量；回滚应用镜像前确认新旧 schema 的兼容窗口。
+3. 先启动数据库并确认迁移与 `/api/health/ready`，再切换应用流量；回滚应用镜像前确认新旧 schema 的兼容窗口。
 4. 数据库备份必须有恢复演练记录；`worldloom-db-data` 卷不是备份策略。
 
-本地可复现的安全演练命令为 `pnpm db:backup:drill`：它在 `worldloom-db` 内创建带固定前缀的临时数据库，执行 custom-format `pg_dump`/`pg_restore`，比较 public table 与 `worlds` 行数后删除临时数据库和 dump；不会覆盖 `worldloom` 或 `worldloom_test`。该命令只能证明本地容器链路，生产仍需使用部署方备份系统完成跨卷/跨主机恢复和迁移回滚演练。
+本地演练入口为 `pnpm db:backup:drill`。2026-10-01 新源码改为本机 PostgreSQL 16 同导出快照的
+public 表内容摘要/行数核对，恢复到带本次所有权标记的精确临时库；会话关闭及清理均确认后
+才报通过，不覆盖用户源库。此次修复与模拟用例尚未执行，旧表数/世界数记录不是新能力证据。
+演练 dump 清理后不存在，不是迁移前可保留的长期备份；仍需另建真实恢复点、验证恢复与
+应用回滚。完整边界见 [BACKUP_RESTORE.md](./BACKUP_RESTORE.md)。对外生产的跨卷/跨主机、
+容量和恢复目标仍须由部署方备份系统另行验收，本机脚本不授予发布权限。
 
 模型 profile 的 `pricing`、`limits.maxInputTokensPerRun`、`limits.maxOutputTokensPerRun` 和
 `limits.maxEstimatedCostUsdPerRun` 必须由部署方依据当前 provider 合同填写。当前
@@ -60,15 +69,62 @@ provider 账户/项目级额度或其他外部硬限额；不能把本应用的 
 `WORLDLOOM_LLM_MAX_OUTPUT_TOKENS_PER_RUN` 和
 `WORLDLOOM_LLM_MAX_ESTIMATED_COST_USD_PER_RUN` 为默认 profile 注入批准的每次业务操作运行时上限，适用于
 同一制品在不同账户/环境发布的场景。适用范围包括单个 CompileRun、问答、创世、推演或整批答案评测；不表示
-所有并发操作的全局累计额度。环境变量只覆盖对应字段；缺失字段沿用配置文件值，非法值按
-`null` 处理并使严格 preflight 失败。它们不是额度查询，也不会从 provider 自动推导账户余额。
+所有并发操作的全局累计额度。环境变量只覆盖对应字段；只有未设置的字段沿用配置文件值。
+显式空值、非正数、非有限费用或不安全的 token 整数会使普通/strict preflight 失败，运行时也在
+读取凭据和发起模型请求前抛出 `llm_budget_config_invalid`，不回退到旧额度或当作“未配置预算”。
+API 返回脱敏的 `503 / llm_budget_config_invalid`，无自动 `Retry-After`；这属于部署配置错误，
+不是预算已经耗尽或 provider 网络故障。需要取消某项覆盖时移除环境变量，不能填写空串；
+profile 中本来未配置的额度仍可保持 `null`，不自动猜测永久上限。
+它们不是额度查询，也不会从 provider 自动推导账户余额。2026-10-01 本段运行时修复和对应
+回归用例尚未执行验证，现运行旧镜像未更新。
 
-发布前可运行 `pnpm deployment:preflight` 做结构检查；脚本会读取被 Git 忽略的 `.env` 和
-`.env.local`（已导出的环境变量优先），只输出变量名和配置状态，不输出任何凭据。
+### 可选的累计 CNY 预留保护
+
+2026-10-01 用户对本机单人首发明确选择：不设累计费用或操作预算上限，只查看累计用量，
+自行判断。该范围内不要求人为设定永久额度或费用拦截；默认 profile 的 limits 保持未配置，
+预算环境覆盖与累计 CNY guard 不启用。用量统计不能依赖启用预算 guard 才工作，也不能
+把未配置额度说成未知余额、零成本或“无限账户余额”。单次模型输出能力、文稿大小和进程
+资源保护不是消费额度，仍保留。此决定不改变未来对外/受控生产部署的严格合同。
+
+累计统计使用独立数据库记录，与可选 guard 解耦；不展示 provider 余额。实现、缺漏边界和
+备份/迁移/回滚要求见 [LLM_USAGE.md](./LLM_USAGE.md)。2026-10-01 仅补入源码，数据库迁移
+和同制品验证尚未执行，当前服务未升级，不把记录器当作完整财务账本或账户硬限制。
+
+`WORLDLOOM_LLM_BUDGET_CNY` 与 `WORLDLOOM_LLM_BUDGET_LEDGER` 必须成对配置；两者都未设置时，
+不启用累计保护，也不推定任何默认额度。金额须能转换为正的安全整数 micro-CNY，账本路径须为
+绝对路径。启用后，预检检查默认 profile 的正数 CNY 输入/输出价格以及 HTTPS 来源、有效核对日
+和 90 天内时效；不完整或非法配置在普通模式和 strict 模式均阻断，而不是只给警告。
+这不替代已有 USD/单操作预算或任何 strict 生产事实门禁。
+
+预检只检查这些配置字段，不打开、创建、清空或结算账本，不验证所填价格是否与账户合同一致。
+其他可选择 profile 的 CNY 价格仍需单独准备；默认 profile 检查不能证明所有模型均可使用。
+真实调用还要求显式最大输出 token 数。部署方必须在实际运行环境确认账本目录可写、挂载可持久化，
+预算范围内各进程共享同一个本地文件；独立容器各自的临时文件不构成共享总额度。既有账本中的
+保留费用、未知 usage 和账本配置变更可能阻断请求，不得删账本以重置预算。
+
+该保护按已配置价格对每次调用（包括重试）预留估算费用，完整 usage 才结算；它不是 provider
+账户余额或账单硬限额。预算错误的 API 反馈为脱敏的 `429 / llm_budget_exceeded`，无自动
+`Retry-After`；应检查预算和用量记录，而不是盲目重试。2026-10-01 本段实现和回归用例已补入
+源码，但用户要求暂不运行验证，尚不构成部署通过证据。
+
+发布前可运行 `pnpm deployment:preflight` 做本地结构检查；普通模式读取被 Git 忽略的 `.env` 和
+`.env.local` 简单 `KEY=value` 项，优先级为已导出的进程环境、`.env.local`、`.env`，且只输出变量名和配置状态。
+严格模式默认只检查调用进程继承的环境变量，不自动读取 `.env.local`，避免把 Next.js 本地文件
+误当作已注入容器/服务的凭据。确需从文件验证时，必须显式指定 `--runtime-env-file <path>`；该文件应与
+部署命令的环境来源一致。预检不做变量展开；若 Compose `--env-file` 含 `$VAR`/`${VAR}` 引用，
+应从部署系统解析后的进程环境运行预检，而不是把模板文件原样传给 `--runtime-env-file`。
+这仍只是配置输入检查，不能替代部署后健康状态和真实 provider 请求验收。
 词法检索版正式发布必须在部署环境中运行严格门禁：
 
 ```bash
 pnpm deployment:preflight -- --strict
+```
+
+若 Compose 和预检使用的文件只含完整字面值（无变量展开），可显式传入同一个文件，例如：
+
+```bash
+docker compose --env-file .env --profile full up -d --build
+NODE_ENV=production pnpm deployment:preflight -- --strict --runtime-env-file .env
 ```
 
 严格模式要求 `NODE_ENV=production`、PostgreSQL `DATABASE_URL`、HTTPS
@@ -108,10 +164,12 @@ worker 重新领取（attempts 至少增加一次）、完成索引并只持久�
 并在 finally 中清理。它覆盖本地 stale-recovery 的 `E2` 契约，不等于生产进程杀停、跨主机 lease、
 容量或滚动发布证据。
 
-若要验证真实进程故障路径，可在 full Compose 已启动且本地 embedding 模型已准备后运行
-`pnpm worker:chaos-smoke -- --timeout-ms=300000 --entities=512`。该演练会创建临时世界，等待独立
-worker 领取任务，发送 `SIGKILL`，确认 Compose 重启、heartbeat lease 过期后重新领取，并验证 attempts
-增加、向量数量不重复；它仍是本地/隔离环境的 `E2` 证据，不能替代生产跨主机故障注入和容量验证。
+真实进程故障演练必须使用专用的 `docker/worker-drill.compose.yml`、随机临时项目和 tmpfs
+数据库，按 [WORKER_DRILL.md](./WORKER_DRILL.md) 准备。`worker:chaos-smoke` 没有默认项目，
+旧的无 scope 命令会失败；脚本先验证实际容器和数据库身份，再仅 SIGKILL/重启已核对的
+worker ID，验证 lease 恢复、同任务重投、完整且唯一的向量与最终清理。双副本场景只验证
+本机观测到的单次领取，受控并发 CAS 另有 DB 测试。两者均为本机 E2，不替代生产跨主机
+故障注入、容量或账户预算验证；不要在正在使用的 full Compose 上执行故障注入。
 
 ## 任务运行模型与规模边界
 
@@ -126,7 +184,23 @@ worker 领取任务，发送 `SIGKILL`，确认 Compose 重启、heartbeat lease
 
 ## 可观测性与上线前检查
 
-- `/api/health` 只用于存活/依赖检查，不作为认证接口；不得把凭据或上游响应正文返回给客户端。
+- `/api/health/live` 只检查进程响应，不访问数据库或外部 provider；`/api/health/ready` 检查 PostgreSQL，依赖不可用时返回 503。平台应分别将它们映射到 liveness/readiness probe。
+- `/api/health` 是模型诊断接口：凭据已配置且缓存过期时会发送带认证的 `GET /models`，不得用作 liveness probe。网关应按部署边界保护健康与诊断路由；任何接口都不得回显凭据或上游响应正文。
+- 2026-10-03 新源码对非成功 chat 响应及 header-only `/models` 探测的未读正文发出
+  transport abort 和 best-effort 清理，不等待可长期挂起的 cancel promise，也不将清理
+  异常替换为原有 provider HTTP 错误。重试、缓存与未知用量口径不改；mock 用例尚未执行，
+  不证明 provider 工作/费用已经停止、真实连接释放或当前服务已采用修复。
+- 同日成功 chat JSON 源码增加 4 MiB 单响应实际字节边界、有界增长缓冲、完整解码/解析
+  及正文中断竞争。超限给脱敏 `llm_response_too_large` / HTTP 502 和 correlation ID，
+  不设置 Retry-After 或自动重试；usage 保留失败/未知，不截断、记零或推定退款。这是
+  资源边界而非消费额度，不覆盖 embedding 或全局堆/数据库/并发。解码、对象和 transport
+  仍有额外分配，支持输出适配和低资源基线待验证；新模拟用例未执行，旧服务未升级。
+- 后续 embedding 源码对错误正文不读取/不等待清理，对成功正文设独立 16 MiB 单批
+  实际字节边界和既有 30 秒期限；批数量、唯一合法 index、配置维度和有限 number
+  严格校验，非法/超限/正文超时转本地，任一远程批失败则整组回退，避免混合向量。
+  本地再失败保留 typed EmbeddingError，已有检索路径据此降级词法；当前未验证或部署，
+  不证明实际本地推理/索引/查询可用。wire 边界不是本地推理/全输入/全局堆或消费上限，
+  不查询/展示 embedding 余额，统计仍只包含 chat；详见 [LLM_USAGE.md](./LLM_USAGE.md)。
 - 关注 `CompileRun` 的 queued/running/failed、`SemanticIndexJob` 的 stale/failed、429 比例、LLM token/延迟和数据库连接池。
 - 检查 `x-correlation-id` 是否贯穿网关、应用日志、任务错误和人工工单。
 - 上线前必须完成：外部认证、限流压测、备份恢复演练、迁移回滚演练、目标规模检索/编译压测和真实 GitHub CI 运行。

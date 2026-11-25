@@ -1,9 +1,11 @@
 'use client';
 
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 type Ops = {
   masterVersion: number;
@@ -50,7 +52,9 @@ type Ops = {
 
 const semanticReasonLabel: Record<string, string> = {
   no_index: '尚未建立',
-  stale_index: '内容已过期',
+  stale_index: '内容或模型已变化，需重新索引',
+  embedding_space_mismatch: '索引与查询模型不一致，已使用词法检索',
+  embedding_error: '向量服务不可用，已使用词法检索',
   semantic_unconfigured: '未配置向量服务',
   disabled_by_request: '已按请求关闭',
   no_targets: '暂无可索引内容'
@@ -103,6 +107,19 @@ const cards: {
 ];
 
 export function OpsTab({ worldId }: { worldId: string }) {
+  const queryClient = useQueryClient();
+  const rebuild = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/worlds/${worldId}/semantic-index`, { method: 'POST' });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error?.message ?? '语义索引更新失败');
+      return body;
+    },
+    onSuccess: (result) =>
+      toast.success(result.job?.status === 'completed' ? '语义索引已更新' : '索引请求已处理'),
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['ops', worldId] })
+  });
   const { data } = useSuspenseQuery({
     queryKey: ['ops', worldId],
     queryFn: async () => {
@@ -179,6 +196,15 @@ export function OpsTab({ worldId }: { worldId: string }) {
             最近更新 {new Date(data.semanticIndex.lastIndexedAt).toLocaleString('zh-CN')}
           </span>
         )}
+        <Button
+          size='sm'
+          variant='outline'
+          disabled={rebuild.isPending || data.semanticIndex.expected === 0}
+          onClick={() => rebuild.mutate()}
+        >
+          {rebuild.isPending ? '正在更新索引…' : '重建语义索引'}
+        </Button>
+        <span className='text-muted-foreground'>按需运行，可能产生接口费用或加载本地模型。</span>
         {data.semanticIndexJob && data.semanticIndexJob.status !== 'completed' && (
           <>
             <span className={data.semanticIndexJob.status === 'failed' ? 'text-destructive' : ''}>

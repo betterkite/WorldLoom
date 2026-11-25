@@ -1,6 +1,6 @@
 import Providers from '@/components/layout/providers';
 import { Toaster } from '@/components/ui/sonner';
-import { fontVariables } from '@/components/themes/font.config';
+import { fontPreloads, fontVariables } from '@/components/themes/font.config';
 import { DEFAULT_THEME, THEMES } from '@/components/themes/theme.config';
 import ThemeProvider from '@/components/themes/theme-provider';
 import { cn } from '@/lib/utils';
@@ -50,6 +50,16 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang='zh-CN' suppressHydrationWarning data-theme={themeToApply}>
       <head>
+        {fontPreloads.map((href) => (
+          <link
+            key={href}
+            rel='preload'
+            href={href}
+            as='font'
+            type='font/woff2'
+            crossOrigin='anonymous'
+          />
+        ))}
         <script
           dangerouslySetInnerHTML={{
             __html: `

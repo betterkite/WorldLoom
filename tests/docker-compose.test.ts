@@ -11,6 +11,10 @@ const localEmbeddings = readFileSync(
 );
 
 describe('production compose migration gate', () => {
+  it('keeps the Compose project identity stable across checkout paths', () => {
+    expect(compose).toMatch(/^name: worldloom$/m);
+  });
+
   it('runs migrations before the app accepts traffic', () => {
     expect(compose).toContain('target: migrate');
     expect(compose).toContain('condition: service_completed_successfully');
@@ -33,6 +37,11 @@ describe('production compose migration gate', () => {
     expect(compose).toContain(
       'pg_isready -U ${POSTGRES_USER:-worldloom} -d ${POSTGRES_DB:-worldloom}'
     );
+  });
+
+  it('uses the local liveness endpoint for Docker healthchecks', () => {
+    expect(dockerfile).toContain('/api/health/live');
+    expect(dockerfile).not.toContain("fetch('http://127.0.0.1:4310/api/health')");
   });
 
   it('installs OpenSSL in every image stage for the Prisma runtime', () => {
@@ -99,6 +108,6 @@ describe('production compose migration gate', () => {
   });
 
   it('passes the canonical public origin into the runtime container', () => {
-    expect(compose).toContain('NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}');
+    expect(compose).toContain('NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://127.0.0.1:4310}');
   });
 });

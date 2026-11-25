@@ -1,0 +1,26 @@
+{
+  "name": "client-only",
+  "version": "0.0.1-worldloom.1",
+  "private": true,
+  "description": "WorldLoom's independently implemented client boundary marker",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/betterkite/WorldLoom.git",
+    "directory": "packages/client-only"
+  },
+  "files": [
+    "index.cjs",
+    "server.cjs",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "commonjs",
+  "main": "index.cjs",
+  "exports": {
+    ".": {
+      "react-server": "./server.cjs",
+      "default": "./index.cjs"
+    }
+  }
+}

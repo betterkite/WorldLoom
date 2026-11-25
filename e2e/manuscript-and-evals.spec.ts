@@ -57,6 +57,33 @@ test.describe.serial('作品导入与评测跑分（UI 端到端）', () => {
       await expect(page.getByText('第一章 残卷').first()).toBeVisible();
       await expect(page.getByText('第二章 入梦').first()).toBeVisible();
 
+      // Directory responses stay small; a click loads just one chapter body.
+      const directory = await api.get(`/api/worlds/${worldId}/manuscripts`);
+      const manuscriptId = (await directory.json()).manuscripts.find(
+        (item: { title: string }) => item.title === 'E2E 作品'
+      ).id;
+      const summary = await api.get(
+        `/api/worlds/${worldId}/manuscripts/${manuscriptId}?chapters=summary`
+      );
+      const summaryBody = await summary.json();
+      expect(
+        summaryBody.manuscript.chapters.every((chapter: object) => !('content' in chapter))
+      ).toBe(true);
+      const chapterRead = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          response.url().includes(`/manuscripts/${manuscriptId}/chapters/`)
+      );
+      await page.getByRole('button', { name: '查看', exact: true }).first().click();
+      expect((await chapterRead).ok()).toBe(true);
+      await expect(page.getByRole('dialog').getByText(/云隐子在枯井底拾得半卷残书/)).toBeVisible();
+      await page.getByRole('button', { name: '关闭', exact: true }).click();
+      await page.getByRole('button', { name: '编辑', exact: true }).first().click();
+      await expect(page.getByLabel('正文', { exact: true })).toHaveValue(
+        /云隐子在枯井底拾得半卷残书/
+      );
+      await page.getByRole('button', { name: '取消', exact: true }).click();
+
       // 3. 评测平台：为该世界添加检索用例并跑分
       await page.goto('/dashboard/evals');
       await page.selectOption('select#eval-world', worldId);

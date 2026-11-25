@@ -4,6 +4,7 @@ import { GovernanceError } from '@/lib/governance/changes';
 import { ZodError } from 'zod';
 import { EmbeddingError } from '@/lib/llm/embeddings';
 import { LlmError } from '@/lib/llm/client';
+import { LlmConfigError } from '@/lib/llm/config';
 import { LlmUsageBudgetError } from '@/lib/llm/usage-budget';
 
 const STATUS_BY_CODE: Record<string, number> = {
@@ -12,6 +13,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   version_not_found: 404,
   entity_not_found: 404,
   event_not_found: 404,
+  chapter_not_found: 404,
+  manuscript_not_found: 404,
   compile_run_not_found: 404,
   change_not_found: 404,
   invalid_world: 400,
@@ -30,6 +33,9 @@ const STATUS_BY_CODE: Record<string, number> = {
   url_fetch_failed: 502,
   change_immutable: 409,
   revision_conflict: 409,
+  legacy_time_cursor: 409,
+  ambiguous_latest_event: 409,
+  invalid_time_cursor: 400,
   nothing_to_merge: 409,
   compile_run_active: 409,
   compile_run_completed: 409,
@@ -75,7 +81,37 @@ export function errorResponse(error: unknown): NextResponse {
       status === 503
     );
   }
+  if (error instanceof LlmConfigError && error.code === 'llm_budget_config_invalid') {
+    return providerErrorResponse(
+      'llm_budget_config_invalid',
+      '模型预算配置无效；已停止当前模型请求，请检查部署配置',
+      503,
+      correlationId,
+      false
+    );
+  }
+  if (
+    error instanceof LlmUsageBudgetError ||
+    (error instanceof LlmError && error.code === 'llm_budget_exceeded')
+  ) {
+    return providerErrorResponse(
+      'llm_budget_exceeded',
+      '模型请求超出已配置预算或用量无法安全核算；当前操作已停止，请检查预算与用量记录',
+      429,
+      correlationId,
+      false
+    );
+  }
   if (error instanceof LlmError) {
+    if (error.code === 'llm_response_too_large') {
+      return providerErrorResponse(
+        'llm_response_too_large',
+        '模型响应超过读取资源上限，当前操作已停止；请检查请求或模型配置',
+        502,
+        correlationId,
+        false
+      );
+    }
     const status =
       error.code === 'llm_upstream_error' && error.status && error.status < 500 ? 502 : 503;
     return providerErrorResponse(
@@ -86,19 +122,9 @@ export function errorResponse(error: unknown): NextResponse {
       status === 503
     );
   }
-  if (error instanceof LlmUsageBudgetError) {
-    return NextResponse.json(
-      {
-        error: {
-          code: error.code,
-          message: '本次模型操作超出已配置预算，请缩减请求或联系管理员',
-          correlationId
-        }
-      },
-      { status: 429, headers: { 'x-correlation-id': correlationId } }
-    );
-  }
-  console.error(`[api] unhandled error ${correlationId}`, error);
+  // Unexpected errors may contain credentials in messages, stacks or causes.
+  // Keep the response/log correlation without forwarding the untrusted object.
+  console.error('[api] unhandled error', { code: 'internal_error', correlationId });
   return NextResponse.json(
     {
       error: {
@@ -128,6 +154,11 @@ export function jsonError(message: string, code: string, status: number): NextRe
 }
 
 const SAFE_MESSAGES: Record<string, string> = {
+  legacy_time_cursor:
+    '此版本使用完整日期顺序；请用 version 和 atEvent 选择时刻，不要沿用旧数字 at 游标',
+  invalid_time_cursor: '请只提供一个有效的事件锚点或有限数字时间游标',
+  ambiguous_latest_event: '事件日期不足以确定唯一最新时刻，请补充日期或手动选择光标事件',
+  event_not_found: '该版本中找不到所选事件，请重新选择时间光标',
   invalid_json: '请求体不是有效 JSON',
   invalid_url: 'URL 不符合安全要求',
   url_fetch_failed: '远程页面抓取失败',

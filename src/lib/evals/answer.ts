@@ -1,9 +1,10 @@
 import { prisma } from '@/lib/db/client';
 import { requireWorld } from '@/lib/governance/changes';
-import { askWorld } from '@/lib/assistant/ask';
+import { answerWorldForEvaluation } from '@/lib/assistant/ask';
 import { chat as defaultChat } from '@/lib/llm/client';
 import type { ChatResult } from '@/lib/llm/client';
 import { LlmUsageBudgetError, withLlmUsageBudget } from '@/lib/llm/usage-budget';
+import { isValidEvalScore, summarizeAnswerResults } from './score';
 
 /**
  * P7-2 收尾：LLM 答案评测。
@@ -68,7 +69,8 @@ async function judgeOnce(
     maxTokens: 300
   });
   const parsed = extractJson(result.content);
-  const score = typeof parsed?.score === 'number' ? Math.min(1, Math.max(0, parsed.score)) : null;
+  const rawScore = parsed?.score;
+  const score = isValidEvalScore(rawScore) ? rawScore : null;
   const reason = typeof parsed?.reason === 'string' ? parsed.reason : '';
   if (score === null)
     return { score: null, reason: `评审输出无法解析：${result.content.slice(0, 80)}` };
@@ -86,7 +88,11 @@ export async function runAnswerEval(
 
   for (const c of cases) {
     try {
-      const answer = await askWorld(worldId, { question: c.query, chatFn: chat });
+      const answer = await answerWorldForEvaluation(worldId, {
+        question: c.query,
+        chatFn: chat,
+        version: world.masterVersion
+      });
       const judge = await judgeOnce(chat, c.query, answer.answer, c.rubric ?? '');
       results.push({
         caseId: globalThis.crypto.randomUUID(),
@@ -110,16 +116,13 @@ export async function runAnswerEval(
     }
   }
 
-  const scored = results.filter(
-    (r): r is AnswerEvalRow & { score: number } => typeof r.score === 'number'
-  );
-  const score = scored.length ? scored.reduce((sum, r) => sum + r.score, 0) / scored.length : 0;
+  const summary = summarizeAnswerResults(results);
   const run = await prisma.evalRun.create({
     data: {
       worldId,
       version: world.masterVersion,
       mode: 'answer',
-      score: Number(score.toFixed(4)),
+      score: summary.score,
       results: results as object[]
     }
   });
@@ -127,7 +130,7 @@ export async function runAnswerEval(
     runId: run.id,
     version: run.version,
     mode: 'answer' as const,
-    score: run.score,
+    ...summary,
     results
   };
 }

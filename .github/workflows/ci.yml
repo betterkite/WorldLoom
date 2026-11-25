@@ -38,7 +38,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 11
+          version: 11.22.0
 
       - uses: actions/setup-node@v7
         with:
@@ -52,7 +52,9 @@ jobs:
         run: pnpm license:audit
 
       - name: Dependency audit
-        run: pnpm audit
+        run: |
+          pnpm audit
+          pnpm --dir docker/migrate audit --prod
 
       - name: Create test database
         run: psql "postgresql://ci:ci@localhost:5432/ci" -c "CREATE DATABASE ci_test;"
@@ -77,7 +79,7 @@ jobs:
       - name: Tests
         run: pnpm test
 
-      - name: Deployment preflight (local contract)
+      - name: Developer configuration preflight (not local release approval)
         run: pnpm deployment:preflight
 
       - name: Build
@@ -85,14 +87,26 @@ jobs:
 
       - name: Generate dependency SBOM
         if: always()
-        run: pnpm run sbom -- --output artifacts/worldloom-sbom.cdx.json
+        run: |
+          pnpm run sbom -- --release --output artifacts/worldloom-sbom.cdx.json
+          pnpm run sbom -- --release --role migration --output artifacts/worldloom-migrate-sbom.cdx.json
+
+      - name: Validate dependency SBOM against pinned CycloneDX schema
+        if: always()
+        run: |
+          node scripts/validate-sbom.mjs artifacts/worldloom-sbom.cdx.json > artifacts/worldloom-sbom-schema.json
+          node scripts/validate-sbom.mjs artifacts/worldloom-migrate-sbom.cdx.json > artifacts/worldloom-migrate-sbom-schema.json
 
       - name: Upload dependency SBOM
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: worldloom-sbom-${{ github.sha }}
-          path: artifacts/worldloom-sbom.cdx.json
+          path: |
+            artifacts/worldloom-sbom.cdx.json
+            artifacts/worldloom-sbom-schema.json
+            artifacts/worldloom-migrate-sbom.cdx.json
+            artifacts/worldloom-migrate-sbom-schema.json
           if-no-files-found: error
           retention-days: 30
 
@@ -126,7 +140,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 11
+          version: 11.22.0
 
       - uses: actions/setup-node@v7
         with:
@@ -159,7 +173,7 @@ jobs:
           setsid pnpm start > e2e-server.log 2>&1 < /dev/null &
           echo $! > e2e-server.pid
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://localhost:4310/api/health > /dev/null; then
+            if curl --fail --silent http://localhost:4310/api/health/ready > /dev/null; then
               exit 0
             fi
             sleep 1
@@ -172,12 +186,18 @@ jobs:
           E2E_BASE_URL: http://localhost:4310
         run: |
           pnpm e2e e2e/manuscript-and-evals.spec.ts
+          pnpm e2e e2e/command-palette.spec.ts
+          pnpm e2e e2e/missing-world.spec.ts
+          pnpm e2e e2e/sidebar-navigation.spec.ts
           pnpm e2e e2e/world-journey.spec.ts
 
       - name: UI acceptance (visual and interaction evidence)
         run: |
-          node scripts/ui-shots.mjs http://localhost:4310
-          node scripts/ui-acceptance.mjs http://localhost:4310
+          shot_output="$(node scripts/ui-shots.mjs http://localhost:4310)"
+          printf '%s\n' "$shot_output"
+          world_id="$(printf '%s\n' "$shot_output" | sed -n 's/^WORLD_ID=//p' | tail -n 1)"
+          test -n "$world_id"
+          node scripts/ui-acceptance.mjs http://localhost:4310 "$world_id"
 
       - name: Full API and page audit
         run: pnpm run audit http://localhost:4310
@@ -224,24 +244,51 @@ jobs:
         run: docker compose --profile full config --quiet
 
       - name: Build migration image
-        run: docker build --target migrate --tag worldloom-migrate:ci .
+        run: |
+          version=$(node -p "require('./package.json').version")
+          docker build --target migrate --build-arg VCS_REF="$GITHUB_SHA" --build-arg VERSION="$version" --tag worldloom-migrate:ci .
+
+      - name: Verify minimal non-root migration runtime
+        run: |
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/verify-migration-runtime.mjs:/tmp/verify-migration-runtime.mjs:ro" \
+            --entrypoint node worldloom-migrate:ci \
+            /tmp/verify-migration-runtime.mjs
+
+      - name: Verify migration image legal payload
+        run: |
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/verify-image-payload.mjs:/tmp/verify-image-payload.mjs:ro" \
+            --volume "$PWD/scripts/font-assets-audit.mjs:/tmp/font-assets-audit.mjs:ro" \
+            --entrypoint node worldloom-migrate:ci \
+            /tmp/verify-image-payload.mjs /app --project-license-only
 
       - name: Build production image
         run: |
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          version=$(node -p "require('./package.json').version")
           docker build \
             --build-arg VCS_REF="$GITHUB_SHA" \
             --build-arg BUILD_DATE="$build_date" \
-            --build-arg VERSION="$GITHUB_SHA" \
+            --build-arg VERSION="$version" \
             --tag worldloom:ci .
-          revision="$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' worldloom:ci)"
-          test "$revision" = "$GITHUB_SHA"
+          for image in worldloom:ci worldloom-migrate:ci; do
+            revision=$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+            image_version=$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")
+            test "$revision" = "$GITHUB_SHA"
+            test "$image_version" = "$version"
+          done
 
-      - name: Verify production image identity and dotenv exclusion
+      - name: Verify production image identity and legal/secret payload
         run: |
           set -eu
           image_user="$(docker image inspect --format '{{.Config.User}}' worldloom:ci)"
           test "$image_user" = "65532:65532"
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/verify-image-payload.mjs:/tmp/verify-image-payload.mjs:ro" \
+            --volume "$PWD/scripts/font-assets-audit.mjs:/tmp/font-assets-audit.mjs:ro" \
+            --entrypoint /nodejs/bin/node worldloom:ci \
+            /tmp/verify-image-payload.mjs /app
           docker run --rm --entrypoint /nodejs/bin/node worldloom:ci -e '
             const fs = require("node:fs");
             const path = require("node:path");
@@ -257,6 +304,50 @@ jobs:
 
       - name: Prepare security evidence directory
         run: mkdir -p artifacts
+
+      - name: Audit Debian and Node base-image copyright payloads
+        run: |
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/base-image-copyright-audit.mjs:/tmp/base-image-copyright-audit.mjs:ro" \
+            --entrypoint node worldloom-migrate:ci \
+            /tmp/base-image-copyright-audit.mjs / --strict --node-runtime \
+            > artifacts/worldloom-migrate-base-copyright.json
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/base-image-copyright-audit.mjs:/tmp/base-image-copyright-audit.mjs:ro" \
+            --entrypoint /nodejs/bin/node worldloom:ci \
+            /tmp/base-image-copyright-audit.mjs / --strict --node-runtime \
+            > artifacts/worldloom-base-copyright.json
+
+      - name: Audit migration runtime license payload
+        run: |
+          image_id="$(docker image inspect --format '{{.Id}}' worldloom-migrate:ci)"
+          docker image inspect "$image_id" > artifacts/worldloom-migrate-image-inspect.json
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/runtime-license-audit.mjs:/tmp/runtime-license-audit.mjs:ro" \
+            --entrypoint node "$image_id" \
+            /tmp/runtime-license-audit.mjs /app --strict --image-id "$image_id" \
+            > artifacts/worldloom-migrate-runtime-licenses.json
+
+      - name: Audit production runtime license payload (release gate)
+        run: |
+          image_id="$(docker image inspect --format '{{.Id}}' worldloom:ci)"
+          docker run --rm --network none --read-only \
+            --volume "$PWD/scripts/runtime-license-audit.mjs:/tmp/runtime-license-audit.mjs:ro" \
+            --entrypoint /nodejs/bin/node "$image_id" \
+            /tmp/runtime-license-audit.mjs /app --strict --image-id "$image_id" \
+            > artifacts/worldloom-runtime-licenses.json
+
+      - name: Upload runtime license evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worldloom-runtime-licenses-${{ github.sha }}
+          path: |
+            artifacts/worldloom-migrate-runtime-licenses.json
+            artifacts/worldloom-runtime-licenses.json
+            artifacts/worldloom-migrate-base-copyright.json
+            artifacts/worldloom-base-copyright.json
+          if-no-files-found: warn
 
       - name: Scan production image for vulnerabilities
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -341,7 +432,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: worldloom-image-metadata-${{ github.sha }}
-          path: artifacts/worldloom-image-inspect.json
+          path: |
+            artifacts/worldloom-image-inspect.json
+            artifacts/worldloom-migrate-image-inspect.json
           if-no-files-found: error
           retention-days: 30
 
@@ -383,7 +476,7 @@ jobs:
             fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:4310/api/health
+          curl --fail --silent http://127.0.0.1:4310/api/health/ready
 
           app_id="$(docker compose --profile full ps -q app)"
           worker_ids="$(docker compose --profile full ps -q worker)"
@@ -465,6 +558,12 @@ jobs:
           name: worldloom-image-metadata-${{ github.sha }}
           path: evidence/image
 
+      - name: Download runtime inventory
+        uses: actions/download-artifact@v7
+        with:
+          name: worldloom-runtime-licenses-${{ github.sha }}
+          path: evidence/runtime
+
       - name: Download vulnerability scan evidence
         uses: actions/download-artifact@v7
         with:
@@ -518,14 +617,24 @@ jobs:
             --revision "$GITHUB_SHA" \
             --sbom evidence/sbom/worldloom-sbom.cdx.json \
             --image evidence/image/worldloom-image-inspect.json \
+            --runtime-inventory evidence/runtime/worldloom-runtime-licenses.json \
             --vulnerability-report evidence/vulnerability/worldloom-trivy.json \
             "${provenance_args[@]}" \
             --output evidence/index.json
+          node scripts/verify-build-evidence.mjs \
+            --role migration \
+            --revision "$GITHUB_SHA" \
+            --sbom evidence/sbom/worldloom-migrate-sbom.cdx.json \
+            --image evidence/image/worldloom-migrate-image-inspect.json \
+            --runtime-inventory evidence/runtime/worldloom-migrate-runtime-licenses.json \
+            --output evidence/migration-index.json
 
       - name: Upload correlated evidence index
         uses: actions/upload-artifact@v7
         with:
           name: worldloom-evidence-index-${{ github.sha }}
-          path: evidence/index.json
+          path: |
+            evidence/index.json
+            evidence/migration-index.json
           if-no-files-found: error
           retention-days: 30

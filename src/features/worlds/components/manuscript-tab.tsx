@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { splitChapters } from '@/lib/chapter-split';
+import { buildImportChapters, bytesToBase64 } from '@/lib/chapter-split';
+import { parseCompileSubmission, submitCompileBatch } from '@/lib/compile-submission';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -39,12 +40,13 @@ interface ChapterRow {
   content: string;
   status: string;
 }
+type ChapterSummary = Omit<ChapterRow, 'content'> & { contentLength: number };
 interface ManuscriptRow {
   id: string;
   title: string;
   synopsis: string;
   cursorEventUid: string | null;
-  chapters: ChapterRow[];
+  chapters: ChapterSummary[];
   pendingContinuations: number;
   cursor: { uid: string; title: string; epochYear: number | null } | null;
 }
@@ -81,7 +83,10 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
   const detail = useQuery({
     queryKey: ['manuscript', worldId, selectedId],
     queryFn: () =>
-      api<{ manuscript: ManuscriptRow }>(`/api/worlds/${worldId}/manuscripts/${selectedId}`, 'GET'),
+      api<{ manuscript: ManuscriptRow }>(
+        `/api/worlds/${worldId}/manuscripts/${selectedId}?chapters=summary`,
+        'GET'
+      ),
     enabled: Boolean(selectedId)
   });
   const continuations = useQuery({
@@ -101,7 +106,6 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
       refresh();
     },
     onError: (error: Error) => {
-      setFinalizingId(null);
       toast.error(error.message);
     }
   });
@@ -114,49 +118,9 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
   };
 
   const create = useMutation({
+    gcTime: 0,
     mutationFn: async (input: { title: string; synopsis: string; bulk: string }) => {
-      // ===== 第一步：前端切片 =====
-      // 每片最多 20000 字，优先在句号处切
-      const MAX_CHUNK = 20_000;
-      const chunks: { title?: string; content: string }[] = [];
-      const rawBlocks = splitChapters(input.bulk);
-
-      for (const block of rawBlocks) {
-        const trimmed = block.trim();
-        if (!trimmed) continue;
-        const lines = trimmed.split('\n');
-        const firstLine = lines[0]?.trim() ?? '';
-        const title = firstLine.startsWith('第') ? firstLine.slice(0, 60) : undefined;
-        const content = title ? lines.slice(1).join('\n').trim() : trimmed;
-
-        if (content.length <= MAX_CHUNK) {
-          // 整章一片（优先保证章节完整）
-          chunks.push({ title, content });
-        } else {
-          // >2 万字 → 每 2 万字前找最后一个句号切
-          let offset = 0;
-          let partNum = 1;
-          while (offset < content.length) {
-            const slice = content.slice(offset, offset + MAX_CHUNK);
-            // 在切片内找最后一个句末标点
-            const lastPeriod = Math.max(
-              slice.lastIndexOf('。'),
-              slice.lastIndexOf('！'),
-              slice.lastIndexOf('？'),
-              slice.lastIndexOf('\n')
-            );
-            const actualCut = lastPeriod > MAX_CHUNK / 2 ? lastPeriod + 1 : slice.length;
-            const piece = content.slice(offset, offset + actualCut);
-            chunks.push({ content: piece });
-            offset += actualCut;
-            partNum++;
-          }
-        }
-      }
-
-      if (chunks.length === 0) {
-        throw new Error('没有可导入的内容');
-      }
+      const chunks = buildImportChapters(input.bulk);
 
       // ===== 第二步：分批提交 =====
       // 每批 ≤5 片 且 ≤10 万字符
@@ -198,25 +162,31 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
       toast.success('作品已创建（章节为草稿态）');
       setCreateOpen(false);
       setSelectedId(result.manuscript.id);
+      setNewBulk('');
+      setNewTitle('');
+      setNewSynopsis('');
+      create.reset();
       refresh();
     },
     onError: (error: Error) => toast.error(error.message)
   });
 
   const finalize = useMutation({
-    mutationFn: ({ chapterId }: { chapterId: string }) => {
+    mutationFn: async ({ chapterId }: { chapterId: string }) => {
       setFinalizingId(chapterId);
-      return api<{ runId: string; totalChunks: number }>(
+      const result = await api<unknown>(
         `/api/worlds/${worldId}/manuscripts/${selectedId}/chapters/${chapterId}/finalize`,
         'POST'
       );
+      return parseCompileSubmission(result);
     },
     onSuccess: (result) => {
       setFinalizingId(null);
       toast.success(`已提交定稿编译任务：${result.totalChunks} 个分块，完成后进入审阅队列`);
       refresh();
     },
-    onError: (error: Error) => toast.error(error.message)
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => setFinalizingId(null)
   });
 
   const [editing, setEditing] = useState<{ id: string; title: string; content: string } | null>(
@@ -229,6 +199,22 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
     content: string;
     status: string;
   } | null>(null);
+  const readChapter = useMutation({
+    gcTime: 0,
+    mutationFn: async (input: { id: string; mode: 'view' | 'edit' }) => {
+      const result = await api<{ chapter: ChapterRow }>(
+        `/api/worlds/${worldId}/manuscripts/${selectedId}/chapters/${input.id}`,
+        'GET'
+      );
+      return result.chapter;
+    },
+    onSuccess: (chapter, input) => {
+      if (input.mode === 'edit') setEditing(chapter);
+      else setViewing(chapter);
+      readChapter.reset();
+    },
+    onError: (error: Error) => toast.error(`章节加载失败：${error.message}`)
+  });
   const saveChapter = useMutation({
     mutationFn: (input: { id: string; title: string; content: string }) =>
       api(`/api/worlds/${worldId}/manuscripts/${selectedId}/chapters/${input.id}`, 'PATCH', {
@@ -244,27 +230,25 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
   });
 
   const compileAll = useMutation({
-    mutationFn: async (chapterIds: string[]) => {
-      let queued = 0;
-      let chunks = 0;
-      for (const id of chapterIds) {
-        try {
-          const result = await api<{
-            totalChunks: number;
-          }>(`/api/worlds/${worldId}/manuscripts/${selectedId}/chapters/${id}/finalize`, 'POST');
-          queued += 1;
-          chunks += result.totalChunks;
-        } catch {
-          // Keep the batch moving; individual failures remain visible in the
-          // durable run status and can be resumed independently.
-        }
-      }
-      return { queued, chunks };
-    },
+    mutationFn: (chapterIds: string[]) =>
+      submitCompileBatch(chapterIds, (id) =>
+        api<unknown>(
+          `/api/worlds/${worldId}/manuscripts/${selectedId}/chapters/${id}/finalize`,
+          'POST'
+        )
+      ),
     onSuccess: (result) => {
-      toast.success(
-        `已提交 ${result.queued} 章 / 共 ${result.chunks} 个编译分块，完成后请到「审阅」合并`
-      );
+      if (!result.queued) {
+        toast.error('未确认任何章节提交，请刷新检查任务状态后重试');
+      } else if (result.unconfirmed) {
+        toast.warning(
+          `已确认提交 ${result.queued} 章 / ${result.chunks} 个分块；${result.unconfirmed} 章提交未确认，请刷新检查任务状态`
+        );
+      } else {
+        toast.success(
+          `已提交 ${result.queued} 章 / 共 ${result.chunks} 个编译分块，完成后请到「审阅」合并`
+        );
+      }
       refresh();
     },
     onError: (error: Error) => toast.error(error.message)
@@ -272,13 +256,14 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
 
   const advance = useMutation({
     mutationFn: () =>
-      api<{ manuscript: ManuscriptRow }>(
+      api<{ manuscript: ManuscriptRow & { cursorWarning?: string | null } }>(
         `/api/worlds/${worldId}/manuscripts/${selectedId}/cursor`,
         'POST',
         { advance: true }
       ),
-    onSuccess: () => {
-      toast.success('光标已推进到最新事件');
+    onSuccess: (result) => {
+      if (result.manuscript.cursorWarning) toast.warning(result.manuscript.cursorWarning);
+      else toast.success('光标已推进到最新事件');
       refresh();
     },
     onError: (error: Error) => toast.error(error.message)
@@ -353,7 +338,7 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
         <span className='text-sm text-muted-foreground'>
           半成品接入 → 光标定位 → 推演候选 → 采纳/续写 → 定稿回编译 → 光标前移
         </span>
-        <Button size='sm' onClick={() => setCreateOpen(true)}>
+        <Button size='sm' disabled={readChapter.isPending} onClick={() => setCreateOpen(true)}>
           <Icons.add className='mr-1 h-4 w-4' /> 新建/导入作品
         </Button>
       </div>
@@ -372,6 +357,7 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
                 key={m.id}
                 size='sm'
                 variant={selectedId === m.id ? 'default' : 'outline'}
+                disabled={readChapter.isPending}
                 onClick={() => setSelectedId(m.id)}
               >
                 {m.title}
@@ -383,6 +369,7 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
                 size='sm'
                 variant='outline'
                 aria-label={`删除作品 ${m.title}`}
+                disabled={readChapter.isPending}
                 onClick={() => {
                   if (window.confirm(`删除作品「${m.title}」及其全部章节？此操作不可恢复。`)) {
                     if (typeof removeManuscript !== 'undefined') removeManuscript.mutate(m.id);
@@ -445,6 +432,11 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
             </Button>
           </div>
           <div className='space-y-2'>
+            {readChapter.isPending && (
+              <p role='status' className='text-sm text-muted-foreground'>
+                正在加载所选章节…
+              </p>
+            )}
             {manuscript.chapters.map((chapter) => (
               <div
                 key={chapter.id}
@@ -455,28 +447,21 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
                 </Badge>
                 <span className='min-w-0 flex-1 truncate font-medium'>{chapter.title}</span>
                 <span className='shrink-0 text-xs text-muted-foreground'>
-                  {chapter.content.length.toLocaleString()} 字
+                  {chapter.contentLength.toLocaleString()} 字
                 </span>
                 <Button
                   size='sm'
                   variant='ghost'
-                  onClick={() =>
-                    setViewing({
-                      id: chapter.id,
-                      title: chapter.title,
-                      content: chapter.content,
-                      status: chapter.status
-                    })
-                  }
+                  disabled={readChapter.isPending || create.isPending || removeManuscript.isPending}
+                  onClick={() => readChapter.mutate({ id: chapter.id, mode: 'view' })}
                 >
                   <Icons.search className='mr-1 h-3.5 w-3.5' /> 查看
                 </Button>
                 <Button
                   size='sm'
                   variant='ghost'
-                  onClick={() =>
-                    setEditing({ id: chapter.id, title: chapter.title, content: chapter.content })
-                  }
+                  disabled={readChapter.isPending || create.isPending || removeManuscript.isPending}
+                  onClick={() => readChapter.mutate({ id: chapter.id, mode: 'edit' })}
                 >
                   <Icons.edit className='mr-1 h-3.5 w-3.5' /> 编辑
                 </Button>
@@ -676,7 +661,8 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
         <DialogContent className='max-h-[85vh] max-w-3xl overflow-y-auto'>
           <DialogHeader>
             <DialogTitle>
-              查看切片：{viewing?.title}（{viewing?.content.length.toLocaleString()} 字 ·{' '}
+              查看切片：{viewing?.title}（
+              {Array.from(viewing?.content ?? '').length.toLocaleString()} 字 ·{' '}
               {viewing?.status === 'final' ? '已定稿' : '草稿'}）
             </DialogTitle>
           </DialogHeader>
@@ -725,13 +711,14 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
                 onChange={async (event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
+                  setExtractBusy(true);
                   const base = file.name.replace(/\.(md|markdown|txt|pdf|epub)$/i, '');
                   try {
                     if (/\.(pdf|epub)$/i.test(file.name)) {
                       // ISS-12：PDF/EPUB 走服务端提取
                       setExtractBusy(true);
                       const buffer = await file.arrayBuffer();
-                      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+                      const base64 = bytesToBase64(new Uint8Array(buffer));
                       const response = await fetch(`/api/worlds/${worldId}/manuscripts/extract`, {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
@@ -777,12 +764,9 @@ export function ManuscriptTab({ worldId }: { worldId: string }) {
               取消
             </Button>
             <Button
-              disabled={!newTitle.trim() || create.isPending}
+              disabled={!newTitle.trim() || create.isPending || extractBusy}
               onClick={() => {
                 create.mutate({ title: newTitle, synopsis: newSynopsis, bulk: newBulk });
-                setNewTitle('');
-                setNewSynopsis('');
-                setNewBulk('');
               }}
             >
               {create.isPending ? '创建中…' : '创建'}

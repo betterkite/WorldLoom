@@ -2,33 +2,15 @@ import { prisma } from '@/lib/db/client';
 import { GovernanceError, requireWorld } from '@/lib/governance/changes';
 import { createCompileRun, executeCompileRun } from './compile-run';
 import type { ChatFn } from './genesis';
+import { createChronology } from './chronology';
+import { IMPORT_CHAPTER_CONTENT_LIMIT, splitChapterContent } from '@/lib/chapter-split';
 
 /**
  * Manuscript studio (Phase 5 core loop):
  *   半成品接入 → 光标定位 → 推演候选（草稿）→ 采纳/续写 → 定稿回编译 → 光标前移
  */
 
-/** 按用户规则切片：优先在句号处切，找不到才硬切。每片 ≤ limit 字符。 */
-function chunkLongContent(content: string, limit: number): string[] {
-  if (content.length <= limit) return [content];
-  const pieces: string[] = [];
-  let remaining = content;
-  while (remaining.length > limit) {
-    // 在 limit 附近往前找最后一个句末标点
-    const window = remaining.slice(0, limit);
-    const sentenceEnd = Math.max(
-      window.lastIndexOf('。'),
-      window.lastIndexOf('！'),
-      window.lastIndexOf('？'),
-      window.lastIndexOf('\n\n')
-    );
-    const cut = sentenceEnd > limit / 2 ? sentenceEnd + 1 : limit;
-    pieces.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut);
-  }
-  if (remaining.trim()) pieces.push(remaining);
-  return pieces;
-}
+export const CHAPTER_CONTENT_LIMIT = IMPORT_CHAPTER_CONTENT_LIMIT;
 
 export async function createManuscript(
   worldId: string,
@@ -43,7 +25,7 @@ export async function createManuscript(
   if (!title) throw new GovernanceError('invalid_manuscript', 'Manuscript title is required');
   const allPieces: { title: string; content: string }[] = [];
   for (const chapter of input.chapters ?? []) {
-    for (const piece of chunkLongContent(chapter.content, 20_000)) {
+    for (const piece of splitChapterContent(chapter.content)) {
       allPieces.push({ title: chapter.title || '', content: piece });
     }
   }
@@ -78,7 +60,7 @@ export async function listManuscripts(worldId: string) {
 }
 
 export async function getManuscript(worldId: string, manuscriptId: string) {
-  await requireWorld(worldId);
+  const world = await requireWorld(worldId);
   const manuscript = await prisma.manuscript.findUnique({
     where: { id: manuscriptId },
     include: {
@@ -91,8 +73,7 @@ export async function getManuscript(worldId: string, manuscriptId: string) {
   }
   const cursor = manuscript.cursorEventUid
     ? await prisma.chronicleEvent.findFirst({
-        where: { worldId, uid: manuscript.cursorEventUid },
-        orderBy: { version: 'desc' },
+        where: { worldId, version: world.masterVersion, uid: manuscript.cursorEventUid },
         select: { uid: true, title: true, sortOrder: true, epochYear: true }
       })
     : null;
@@ -111,8 +92,11 @@ export async function addChapter(
   if (!manuscript || manuscript.worldId !== worldId) {
     throw new GovernanceError('manuscript_not_found', 'Manuscript not found');
   }
-  if (!String(input.content ?? '').trim()) {
+  if (!input.content?.length) {
     throw new GovernanceError('invalid_chapter', 'Chapter content is required');
+  }
+  if (input.content.length > CHAPTER_CONTENT_LIMIT) {
+    throw new GovernanceError('invalid_chapter', `Chapter exceeds ${CHAPTER_CONTENT_LIMIT} units`);
   }
   const last = await prisma.chapter.findFirst({
     where: { manuscriptId },
@@ -129,8 +113,6 @@ export async function addChapter(
     }
   });
 }
-
-export const CHAPTER_CONTENT_LIMIT = 20_000;
 
 export async function updateChapter(
   worldId: string,
@@ -176,38 +158,11 @@ export async function createChapterCompileRun(
   if (chapter.status === 'final') {
     throw new GovernanceError('chapter_already_final', 'Chapter is already finalized');
   }
-  const world = await requireWorld(worldId);
-  const [epochs, entities, events] = await Promise.all([
-    prisma.epoch.findMany({
-      where: { worldId, version: world.masterVersion },
-      select: { uid: true, name: true }
-    }),
-    prisma.entity.findMany({
-      where: { worldId, version: world.masterVersion },
-      select: { uid: true, name: true, kind: true }
-    }),
-    prisma.chronicleEvent.findMany({
-      where: { worldId, version: world.masterVersion },
-      select: { uid: true, title: true }
-    })
-  ]);
-
   return createCompileRun(worldId, {
     kind: 'chapter',
     chapterId,
     sourceFilename: `章节 · ${chapter.title}`,
-    sourceContent: chapter.content,
-    context: {
-      worldName: world.name,
-      premise: world.premise,
-      style: world.style,
-      catalog: {
-        epochs: epochs.map((e) => ({ uid: e.uid, name: e.name })),
-        entities: entities.map((e) => ({ uid: e.uid, name: e.name, kind: e.kind })),
-        events: events.map((e) => ({ uid: e.uid, title: e.title }))
-      },
-      sourceFilename: `章节 · ${chapter.title}`
-    }
+    sourceContent: chapter.content
   });
 }
 
@@ -244,34 +199,64 @@ export async function finalizeChapter(
 }
 
 /** Set the narrative cursor to a chronicle event (story "now"). */
-export async function setCursor(worldId: string, manuscriptId: string, eventUid: string | null) {
-  await requireWorld(worldId);
-  if (eventUid) {
-    const event = await prisma.chronicleEvent.findFirst({
-      where: { worldId, uid: eventUid },
-      orderBy: { version: 'desc' }
+export async function setCursor(
+  worldId: string,
+  manuscriptId: string,
+  eventUid: string | null,
+  expectedVersion?: number
+) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${worldId}))`;
+    const world = await tx.world.findUnique({ where: { id: worldId } });
+    if (!world) throw new GovernanceError('world_not_found', 'World not found');
+    if (expectedVersion !== undefined && world.masterVersion !== expectedVersion) {
+      throw new GovernanceError(
+        'revision_conflict',
+        'World changed while selecting the latest event'
+      );
+    }
+    if (eventUid) {
+      const event = await tx.chronicleEvent.findFirst({
+        where: { worldId, version: world.masterVersion, uid: eventUid }
+      });
+      if (!event)
+        throw new GovernanceError(
+          'event_not_found',
+          'Cursor event not found in the master version'
+        );
+    }
+    const manuscript = await tx.manuscript.findUnique({ where: { id: manuscriptId } });
+    if (!manuscript || manuscript.worldId !== worldId) {
+      throw new GovernanceError('manuscript_not_found', 'Manuscript not found');
+    }
+    return tx.manuscript.update({
+      where: { id: manuscriptId },
+      data: { cursorEventUid: eventUid }
     });
-    if (!event) throw new GovernanceError('event_not_found', 'Cursor event not found');
-  }
-  const manuscript = await prisma.manuscript.findUnique({ where: { id: manuscriptId } });
-  if (!manuscript || manuscript.worldId !== worldId) {
-    throw new GovernanceError('manuscript_not_found', 'Manuscript not found');
-  }
-  return prisma.manuscript.update({
-    where: { id: manuscriptId },
-    data: { cursorEventUid: eventUid }
   });
 }
 
 /** Advance the cursor to the chronologically latest master event. */
 export async function advanceCursorToLatest(worldId: string, manuscriptId: string) {
   const world = await requireWorld(worldId);
-  const latest = await prisma.chronicleEvent.findFirst({
-    where: { worldId, version: world.masterVersion },
-    orderBy: { sortOrder: 'desc' }
-  });
-  if (!latest) throw new GovernanceError('event_not_found', 'No events to advance to');
-  return setCursor(worldId, manuscriptId, latest.uid);
+  const [events, epochs] = await Promise.all([
+    prisma.chronicleEvent.findMany({ where: { worldId, version: world.masterVersion } }),
+    prisma.epoch.findMany({ where: { worldId, version: world.masterVersion } })
+  ]);
+  const chronology = createChronology(events, epochs);
+  const latest = chronology.latest();
+  if (!latest.length) throw new GovernanceError('event_not_found', 'No events to advance to');
+  if (latest.length > 1 && !latest.every((event) => chronology.sameInstant(event, latest[0]))) {
+    throw new GovernanceError('ambiguous_latest_event', 'Choose an event or specify its date');
+  }
+  const manuscript = await setCursor(worldId, manuscriptId, latest[0].uid, world.masterVersion);
+  return {
+    ...manuscript,
+    cursorWarning:
+      latest.length > 1
+        ? '最新日期有多个同日事件，已选择其中一个；同日事件之间尚无确定先后。'
+        : null
+  };
 }
 
 /** 删除作品（章节随 Prisma 级联删除；推演候选的世界归属保留）。 */

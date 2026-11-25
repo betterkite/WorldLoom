@@ -3,6 +3,7 @@ import { updateChapter } from '@/lib/worldbuilding/manuscript';
 import { errorResponse, readJsonBody } from '@/lib/api';
 import { MAX_JSON_REQUEST_BYTES } from '@/lib/intake/limits';
 import { z } from 'zod';
+import { getManuscriptChapter } from '@/lib/worldbuilding/manuscript-summary';
 
 type Params = { params: Promise<{ worldId: string; manuscriptId: string; chapterId: string }> };
 
@@ -10,6 +11,17 @@ const patchSchema = z.object({
   title: z.string().max(200).optional(),
   content: z.string().min(1).max(20_000).optional()
 });
+
+export async function GET(_request: NextRequest, { params }: Params) {
+  try {
+    const { worldId, manuscriptId, chapterId } = await params;
+    return NextResponse.json({
+      chapter: await getManuscriptChapter(worldId, manuscriptId, chapterId)
+    });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
 
 export async function PATCH(request: NextRequest, { params }: Params) {
   try {

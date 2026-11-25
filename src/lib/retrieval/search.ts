@@ -1,10 +1,13 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import { tokenize, cosine } from './tokenizer';
-import { embed as defaultEmbed, EmbeddingError } from '@/lib/llm/embeddings';
+import { embed as defaultEmbed, embedWithSpace, EmbeddingError } from '@/lib/llm/embeddings';
+import { configuredEmbeddingSpaces } from '@/lib/llm/embedding-space';
+import { bestCompatibleIndex, matchingIndexRows, type SemanticVectorRow } from './embedding-index';
 import { getEmbeddingsConfig, isSemanticEnabled } from '@/lib/llm/config';
 import { contentHash } from './tokenizer';
 import { MAX_AUTOMATIC_WORKER_RECOVERIES } from '@/lib/worker/policy';
+import { getExecutionLimiter } from '@/lib/worker/execution';
 
 /**
  * Hybrid retrieval:
@@ -41,6 +44,7 @@ export interface SemanticIndexStatus {
   fresh: boolean;
   lastIndexedAt: string | null;
   embeddingModel: string | null;
+  embeddingSpaceId?: string | null;
   reason:
     | 'not_requested'
     | 'disabled_by_request'
@@ -49,6 +53,7 @@ export interface SemanticIndexStatus {
     | 'no_index'
     | 'stale_index'
     | 'embedding_error'
+    | 'embedding_space_mismatch'
     | null;
 }
 
@@ -63,23 +68,31 @@ interface Target {
   content: string;
 }
 
-interface SemanticVectorRow {
-  target_key: string;
-  content_hash: string;
-  embedding: string | null;
-  embedding_model: string | null;
-  updated_at: string;
-}
-
 export async function searchWorld(
   worldId: string,
   query: string,
-  options: { topK?: number; useSemantic?: boolean; embedFn?: typeof defaultEmbed } = {}
+  options: {
+    topK?: number;
+    useSemantic?: boolean;
+    embedFn?: typeof defaultEmbed;
+    version?: number;
+  } = {}
 ): Promise<SearchResult> {
   const embed = options.embedFn ?? defaultEmbed;
   const world = await prisma.world.findUnique({ where: { id: worldId } });
   if (!world) throw new Error(`World not found: ${worldId}`);
-  const v = world.masterVersion;
+  const v = options.version ?? world.masterVersion;
+  if (options.version !== undefined) {
+    if (
+      !Number.isSafeInteger(v) ||
+      v < 1 ||
+      !(await prisma.worldVersion.findUnique({
+        where: { worldId_version: { worldId, version: v } }
+      }))
+    ) {
+      throw new Error(`World version not found: ${v}`);
+    }
+  }
   const topK = Math.min(20, Math.max(1, options.topK ?? 8));
 
   const [entities, events, relations] = await Promise.all([
@@ -165,6 +178,7 @@ export async function searchWorld(
     fresh: false,
     lastIndexedAt: null,
     embeddingModel: getEmbeddingsConfig()?.model ?? null,
+    embeddingSpaceId: null,
     reason: 'not_requested'
   };
   // useSemantic===true forces the semantic path (tests / explicit opt-in);
@@ -183,20 +197,19 @@ export async function searchWorld(
       const ids = targets.map((target) => `${target.kind}:${target.uid}`);
       const stored = await prisma.$queryRaw<SemanticVectorRow[]>`
         SELECT target_kind || ':' || "targetUid" AS target_key,
-          content_hash, embedding::text AS embedding, "embeddingModel" AS embedding_model,
+          content_hash, embedding::text AS embedding, vector_dims(embedding) AS dims, "embeddingModel" AS embedding_model,
           updated_at::text AS updated_at
         FROM semantic_vectors WHERE "worldId" = ${worldId} AND version = ${v}`;
-      const configuredModel = getEmbeddingsConfig()?.model ?? null;
       const customEmbed = options.embedFn !== undefined && options.embedFn !== defaultEmbed;
       const expectedHashes = new Map(
         targets.map((target) => [`${target.kind}:${target.uid}`, contentHash(target.content)])
       );
-      const freshRows = stored.filter(
-        (row) =>
-          row.embedding &&
-          expectedHashes.get(row.target_key) === row.content_hash &&
-          (customEmbed || row.embedding_model === configuredModel)
-      );
+      const compatible = bestCompatibleIndex(stored, expectedHashes, configuredEmbeddingSpaces());
+      const freshRows = customEmbed
+        ? stored.filter(
+            (row) => row.embedding && expectedHashes.get(row.target_key) === row.content_hash
+          )
+        : compatible.rows;
       const coverage = freshRows.length / targets.length;
       semantic = {
         version: v,
@@ -210,7 +223,8 @@ export async function searchWorld(
             .filter(Boolean)
             .toSorted()
             .at(-1) ?? null,
-        embeddingModel: configuredModel,
+        embeddingModel: compatible.space?.model ?? getEmbeddingsConfig()?.model ?? null,
+        embeddingSpaceId: compatible.space?.id ?? null,
         reason:
           stored.length === 0
             ? 'no_index'
@@ -219,15 +233,33 @@ export async function searchWorld(
               : 'stale_index'
       };
       if (semantic.fresh) {
-        const [queryVector] = await embed([query]);
-        const vectorByTarget = new Map(
-          freshRows.map((row) => [row.target_key, JSON.parse(row.embedding!) as number[]])
-        );
-        denseScores = targets.map((_, index) => {
-          const vector = vectorByTarget.get(ids[index]);
-          return vector ? Math.max(0, cosine(queryVector, vector)) : 0;
-        });
-        mode = 'hybrid';
+        const batch = customEmbed
+          ? { vectors: await embed([query]), space: null }
+          : await embedWithSpace([query]);
+        const queryRows = batch.space
+          ? matchingIndexRows(stored, expectedHashes, batch.space)
+          : freshRows;
+        const queryCoverage = queryRows.length / targets.length;
+        semantic = {
+          ...semantic,
+          indexed: queryRows.length,
+          coverage: Number(queryCoverage.toFixed(4)),
+          fresh: queryCoverage >= SEMANTIC_COVERAGE_THRESHOLD,
+          embeddingModel: batch.space?.model ?? semantic.embeddingModel,
+          embeddingSpaceId: batch.space?.id ?? null,
+          reason: queryCoverage >= SEMANTIC_COVERAGE_THRESHOLD ? null : 'embedding_space_mismatch'
+        };
+        if (semantic.fresh) {
+          const [queryVector] = batch.vectors;
+          const vectorByTarget = new Map(
+            queryRows.map((row) => [row.target_key, JSON.parse(row.embedding!) as number[]])
+          );
+          denseScores = targets.map((_, index) => {
+            const vector = vectorByTarget.get(ids[index]);
+            return vector ? Math.max(0, cosine(queryVector, vector)) : 0;
+          });
+          mode = 'hybrid';
+        }
       }
     } catch (error) {
       if (!(error instanceof EmbeddingError)) throw error;
@@ -314,7 +346,7 @@ export async function getSemanticIndexStatus(worldId: string): Promise<SemanticI
     prisma.chronicleEvent.findMany({ where: { worldId, version: world.masterVersion } }),
     prisma.relationshipEvent.findMany({ where: { worldId, version: world.masterVersion } }),
     prisma.$queryRaw<SemanticVectorRow[]>`
-      SELECT target_key, content_hash, embedding::text AS embedding,
+      SELECT target_key, content_hash, embedding::text AS embedding, vector_dims(embedding) AS dims,
         "embeddingModel" AS embedding_model, updated_at::text AS updated_at
       FROM (
         SELECT target_kind || ':' || "targetUid" AS target_key,
@@ -323,7 +355,6 @@ export async function getSemanticIndexStatus(worldId: string): Promise<SemanticI
         WHERE "worldId" = ${worldId} AND version = ${world.masterVersion}
       ) indexed`
   ]);
-  const configuredModel = getEmbeddingsConfig()?.model ?? null;
   const entityById = new Map(entities.map((entity) => [entity.uid, entity]));
   const eventById = new Map(events.map((event) => [event.uid, event]));
   const expectedHashes = new Map<string, string>([
@@ -360,12 +391,8 @@ export async function getSemanticIndexStatus(worldId: string): Promise<SemanticI
     })
   ]);
   const expected = expectedHashes.size;
-  const fresh = stored.filter(
-    (row) =>
-      row.embedding &&
-      expectedHashes.get(row.target_key) === row.content_hash &&
-      row.embedding_model === configuredModel
-  ).length;
+  const compatible = bestCompatibleIndex(stored, expectedHashes, configuredEmbeddingSpaces());
+  const fresh = compatible.rows.length;
   const coverage = expected ? fresh / expected : 0;
   return {
     version: world.masterVersion,
@@ -373,7 +400,8 @@ export async function getSemanticIndexStatus(worldId: string): Promise<SemanticI
     indexed: fresh,
     coverage: Number(coverage.toFixed(4)),
     fresh: expected > 0 && coverage >= SEMANTIC_COVERAGE_THRESHOLD,
-    embeddingModel: configuredModel,
+    embeddingModel: compatible.space?.model ?? getEmbeddingsConfig()?.model ?? null,
+    embeddingSpaceId: compatible.space?.id ?? null,
     lastIndexedAt:
       stored
         .map((row) => row.updated_at)
@@ -383,7 +411,7 @@ export async function getSemanticIndexStatus(worldId: string): Promise<SemanticI
     reason:
       expected === 0
         ? 'no_targets'
-        : !configuredModel
+        : configuredEmbeddingSpaces().length === 0
           ? 'semantic_unconfigured'
           : stored.length === 0
             ? 'no_index'
@@ -475,7 +503,18 @@ export async function indexWorldSemantic(
   if (targets.length === 0) return { indexed: 0, skipped: true, reason: 'no content' };
 
   await options.onProgress?.();
-  const vectors = await embedFn(targets.map((target) => target.text));
+  const texts = targets.map((target) => target.text);
+  const batch = embedFn === defaultEmbed ? await embedWithSpace(texts) : null;
+  const vectors = batch ? batch.vectors : await embedFn(texts);
+  if (
+    vectors.length !== targets.length ||
+    (batch && vectors.some((vector) => vector.length !== batch.space.dimensions))
+  ) {
+    throw new EmbeddingError(
+      'embedding_invalid_response',
+      'Embedding batch dimensions do not match'
+    );
+  }
   const currentWorld = await prisma.world.findUnique({
     where: { id: worldId },
     select: { masterVersion: true }
@@ -484,8 +523,7 @@ export async function indexWorldSemantic(
     return { indexed: 0, skipped: true, reason: 'world_deleted_or_superseded' };
   }
   const dims = vectors[0]?.length ?? 0;
-  const embeddingModel =
-    embedFn === defaultEmbed ? (getEmbeddingsConfig()?.model ?? null) : 'custom-test';
+  const embeddingModel = batch ? batch.space.id : 'custom-test';
   for (let i = 0; i < targets.length; i += 1) {
     const hash = contentHash(targets[i].text);
     try {
@@ -630,7 +668,19 @@ export async function runSemanticIndexJob(jobId: string) {
   if (claim.count === 0) return prisma.semanticIndexJob.findUnique({ where: { id: jobId } });
 
   const claimed = await prisma.semanticIndexJob.findUniqueOrThrow({ where: { id: jobId } });
+  // A queued API executor can wait behind compilation. Keep its lease alive
+  // while waiting and while an embedding batch is in flight.
+  const heartbeat = setInterval(() => {
+    void prisma.semanticIndexJob
+      .updateMany({
+        where: { id: jobId, status: 'running' },
+        data: { lastHeartbeatAt: new Date() }
+      })
+      .catch(() => undefined);
+  }, 5_000);
+  let releaseSlot: (() => void) | undefined;
   try {
+    releaseSlot = await getExecutionLimiter().acquire();
     const world = await prisma.world.findUnique({
       where: { id: claimed.worldId },
       select: { masterVersion: true }
@@ -671,6 +721,9 @@ export async function runSemanticIndexJob(jobId: string) {
       }
     });
     return prisma.semanticIndexJob.findUnique({ where: { id: claimed.id } });
+  } finally {
+    releaseSlot?.();
+    clearInterval(heartbeat);
   }
 }
 

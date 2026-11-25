@@ -34,7 +34,7 @@ export function useBreadcrumbs() {
       const isWorldId = segments[index - 1] === 'worlds' && !SEGMENT_LABELS[segment];
       return {
         title: SEGMENT_LABELS[segment] ?? (isWorldId ? '当前世界' : segment),
-        link: path
+        link: path === '/dashboard/worlds' ? '/dashboard/overview' : path
       };
     });
   }, [pathname]);

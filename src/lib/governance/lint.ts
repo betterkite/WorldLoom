@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { GovernanceError, requireWorld } from './changes';
 import { daysInMonth, parseCalendar } from '@/lib/worldbuilding/calendar';
+import { createChronology } from '@/lib/worldbuilding/chronology';
 
 /**
  * Chronicle lint engine (Phase 3).
@@ -39,7 +40,10 @@ export async function runLint(worldId: string) {
   const v = world.masterVersion;
 
   const [epochs, entities, events, edges, relations, previous] = await Promise.all([
-    prisma.epoch.findMany({ where: { worldId, version: v }, select: { uid: true, name: true } }),
+    prisma.epoch.findMany({
+      where: { worldId, version: v },
+      select: { uid: true, name: true, order: true }
+    }),
     prisma.entity.findMany({ where: { worldId, version: v }, select: { uid: true, name: true } }),
     prisma.chronicleEvent.findMany({ where: { worldId, version: v } }),
     prisma.eventEdge.findMany({ where: { worldId, version: v } }),
@@ -47,6 +51,7 @@ export async function runLint(worldId: string) {
     prisma.lintFinding.findMany({ where: { worldId, version: v } })
   ]);
 
+  const chronology = createChronology(events, epochs);
   const eventByUid = new Map(events.map((e) => [e.uid, e]));
   const entityUids = new Set(entities.map((e) => e.uid));
   const epochUids = new Set(epochs.map((e) => e.uid));
@@ -59,13 +64,13 @@ export async function runLint(worldId: string) {
     const cause = eventByUid.get(edge.causeUid);
     const effect = eventByUid.get(edge.effectUid);
     if (!cause || !effect) continue; // dangling handled by R2
-    if (cause.sortOrder > effect.sortOrder) {
+    if (chronology.before(effect, cause)) {
       push({
         rule: 'causal_inversion',
         severity: 'error',
         targetUid: effect.uid,
         relatedUid: cause.uid,
-        message: `因果倒置：「${cause.title}」(sort ${cause.sortOrder}) 晚于其结果「${effect.title}」(sort ${effect.sortOrder})`,
+        message: `因果倒置：「${cause.title}」的最早日期晚于其结果「${effect.title}」的最晚日期`,
         fingerprint: `causal_inversion:${effect.uid}:${cause.uid}`
       });
     }
@@ -246,18 +251,17 @@ export async function runLint(worldId: string) {
   }
 
   // ---- R7 dead_participant (heuristic) ----
-  const deceasedAt = new Map<string, number>();
+  const deceasedAt = new Map<string, typeof events>();
   for (const event of events) {
     if (!DEATH_PATTERN.test(`${event.title}${event.summary}`)) continue;
     for (const participant of event.participantUids) {
-      const current = deceasedAt.get(participant);
-      deceasedAt.set(participant, Math.min(current ?? Number.POSITIVE_INFINITY, event.sortOrder));
+      deceasedAt.set(participant, [...(deceasedAt.get(participant) ?? []), event]);
     }
   }
   for (const event of events) {
     for (const participant of event.participantUids) {
-      const deathSort = deceasedAt.get(participant);
-      if (deathSort !== undefined && event.sortOrder > deathSort) {
+      const deaths = deceasedAt.get(participant) ?? [];
+      if (deaths.some((death) => chronology.before(death, event))) {
         push({
           rule: 'dead_participant',
           severity: 'warning',

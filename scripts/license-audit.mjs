@@ -8,6 +8,8 @@ const allowed = new Set([
   'BSD-2-Clause',
   'BSD-3-Clause',
   'CC-BY-4.0',
+  // railroad-diagrams@1.0.0: CC0 declaration verified in package README and JS header.
+  'CC0-1.0',
   'ISC',
   'LGPL-3.0-or-later',
   'MIT',

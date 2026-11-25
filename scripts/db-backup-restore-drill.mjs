@@ -1,123 +1,143 @@
 #!/usr/bin/env node
-
-/**
- * 在同一个 PostgreSQL 容器中执行一次可丢弃的备份/恢复演练。
- *
- * 约束：
- * - 只读取 WORLDLOOM_DB_CONTAINER 中的 source database；
- * - 只创建并最终删除一个带前缀的临时 database；
- * - 不覆盖 worldloom、worldloom_test 或任何用户指定名称的 database；
- * - 备份文件只存在于数据库容器的 /tmp，演练结束后清理。
- */
-
-import { execFileSync } from 'node:child_process';
+/** Local PostgreSQL 16 snapshot/restore drill. Importing this file never runs it. */
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import {
+  BackupDrillError, backupOptions, backupResources, backupContainer,
+  compareBackup, requireBackup, snapshotMetadata
+} from './backup-drill-contract.mjs';
+import { dockerCommand, openSnapshotSession, postgresArgs, postgresUtilityArgs } from './backup-drill-transport.mjs';
 
-const container = process.env.WORLDLOOM_DB_CONTAINER ?? 'worldloom-db';
-const dbUser = process.env.WORLDLOOM_DB_USER ?? 'worldloom';
-const sourceDatabase = process.env.WORLDLOOM_DB_NAME ?? 'worldloom';
-const drillSuffix = randomUUID().replaceAll('-', '');
-const drillDatabase = `worldloom_backup_drill_${drillSuffix}`;
-const backupPath = `/tmp/${drillDatabase}.dump`;
+const inspectFormat = '{"id":{{json .Id}},"running":{{json .State.Running}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}}}';
 
-if (!/^worldloom_backup_drill_[a-z0-9_]+$/.test(drillDatabase)) {
-  throw new Error('generated drill database name failed the safety check');
-}
+export async function runBackupRestoreDrill(env = process.env, dependencies = {}) {
+  const options = backupOptions(env);
+  const resources = backupResources((dependencies.uuid ?? randomUUID)());
+  const docker = dependencies.docker ?? dockerCommand;
+  const openSnapshot = dependencies.openSnapshot ?? openSnapshotSession;
+  let containerId;
+  let directory;
+  let directoryOwned = false;
+  let databaseCreated = false;
+  let sourceSession;
+  let restoreSession;
+  let failure;
+  let cleanupFailed = false;
+  let source;
+  let usagePresent = false;
+  const readContainer = async (reference) => {
+    let value;
+    try { value = JSON.parse(await docker(['inspect', '--format', inspectFormat, reference])); }
+    catch { throw new BackupDrillError('container_inspect_failed'); }
+    return backupContainer(value);
+  };
+  const exec = (args, controls) => docker(['exec', containerId, ...args], controls);
+  const postgres = (args, controls) => docker(['exec', '-e',
+    'PGOPTIONS=-c statement_timeout=60000 -c lock_timeout=5000', '-i', containerId, ...args], controls);
+  const sql = (database, query) => postgres(postgresArgs(options.dbUser, database), { input: query });
+  const assertDatabaseOwned = async () => {
+    const marker = await sql('postgres', `SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = '${resources.database}';`);
+    requireBackup(marker === resources.marker, 'database_ownership_unconfirmed');
+  };
+  const assertDirectoryOwned = async () => {
+    requireBackup(resources.directoryPattern.test(directory ?? '') &&
+      await exec(['stat', '-c', '%F:%a', directory]) === 'directory:700' &&
+      ['regular file:600', 'regular empty file:600'].includes(
+        await exec(['stat', '-c', '%F:%a', `${directory}/${resources.ownerFile}`])
+      ), 'directory_ownership_unconfirmed');
+  };
 
-function docker(args, { capture = false } = {}) {
   try {
-    const output = execFileSync('docker', ['exec', container, ...args], {
-      encoding: 'utf8',
-      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
-    });
-    return typeof output === 'string' ? output.trim() : '';
+    const override = env.DOCKER_HOST;
+    requireBackup(override === undefined || /^unix:\/\/\/[^\r\n]+$/.test(override), 'nonlocal_docker');
+    const contextHost = JSON.parse(await docker(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}']));
+    requireBackup(typeof contextHost === 'string' && /^unix:\/\/\/[^\r\n]+$/.test(contextHost), 'nonlocal_docker');
+    containerId = await readContainer(options.container);
+    requireBackup((await exec(['timeout', '--version'])).startsWith('timeout (GNU coreutils) '),
+      'unsupported_container_timeout');
+    const createdDirectory = await exec(['mktemp', '-d', resources.directoryTemplate]);
+    requireBackup(resources.directoryPattern.test(createdDirectory), 'invalid_dump_directory');
+    directory = createdDirectory;
+    directoryOwned = true;
+    await exec(['touch', `${directory}/${resources.ownerFile}`]);
+    await exec(['chmod', '600', `${directory}/${resources.ownerFile}`]);
+    await assertDirectoryOwned();
+
+    sourceSession = openSnapshot(containerId, options.dbUser, options.sourceDatabase);
+    const metadata = snapshotMetadata(await sourceSession.metadata(true), options.sourceDatabase);
+    source = await sourceSession.fingerprints(metadata.tables);
+    usagePresent = metadata.tables.includes('llm_usage_calls');
+    await postgres(postgresUtilityArgs('pg_dump', ['-w', '-h', '/var/run/postgresql', '-p', '5432', '-U', options.dbUser,
+      '-d', options.sourceDatabase, '--format=custom', `--snapshot=${metadata.snapshot}`,
+      '--lock-wait-timeout=5000', '--file', `${directory}/backup.dump`]), { capture: false });
+    // Keep the exporting transaction open until pg_dump finishes, then release
+    // it immediately: restoration does not need source locks or the snapshot.
+    await sourceSession.close();
+    sourceSession = null;
+
+    await sql('postgres', `CREATE DATABASE "${resources.database}" WITH TEMPLATE template0;`);
+    databaseCreated = true;
+    await sql('postgres', `COMMENT ON DATABASE "${resources.database}" IS '${resources.marker}';`);
+    await assertDatabaseOwned();
+    await postgres(postgresUtilityArgs('pg_restore', ['-w', '-h', '/var/run/postgresql', '-p', '5432', '-U', options.dbUser,
+      '--exit-on-error', '--no-owner', '--dbname', resources.database, `${directory}/backup.dump`]), { capture: false });
+    await assertDatabaseOwned();
+    restoreSession = openSnapshot(containerId, options.dbUser, resources.database);
+    const restored = snapshotMetadata(await restoreSession.metadata(false), resources.database, { exported: false });
+    requireBackup(JSON.stringify(restored.tables) === JSON.stringify(metadata.tables), 'restore_inventory_mismatch');
+    compareBackup(source, await restoreSession.fingerprints(restored.tables), metadata.tables);
+    await restoreSession.close();
+    restoreSession = null;
   } catch (error) {
-    const stderr = error?.stderr?.toString?.().trim();
-    const suffix = stderr ? `: ${stderr.slice(-800)}` : '';
-    throw new Error(`docker ${args[0] ?? 'command'} failed${suffix}`);
-  }
-}
-
-function psql(database, sql, { capture = false } = {}) {
-  return docker(
-    ['psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', dbUser, '-d', database, '-At', '-c', sql],
-    { capture }
-  );
-}
-
-function count(database, sql) {
-  const value = Number(psql(database, sql, { capture: true }));
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`invalid count returned for ${database}`);
-  }
-  return value;
-}
-
-let cleaned = false;
-function cleanup() {
-  if (cleaned) return;
-  cleaned = true;
-  try {
-    docker(['psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', dbUser, '-d', 'postgres', '-c',
-      `DROP DATABASE IF EXISTS "${drillDatabase}";`], { capture: true });
-  } catch (error) {
-    console.error(`cleanup failed: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
-
-try {
-  const sourceTables = count(
-    sourceDatabase,
-    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-  );
-  const sourceWorlds = count(sourceDatabase, 'SELECT count(*) FROM worlds');
-
-  docker(['psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', dbUser, '-d', 'postgres', '-c',
-    `CREATE DATABASE "${drillDatabase}";`], { capture: true });
-  psql(drillDatabase, 'CREATE EXTENSION IF NOT EXISTS vector;', { capture: true });
-  docker(['pg_dump', '-U', dbUser, '-d', sourceDatabase, '--format=custom', '--file', backupPath], {
-    capture: true
-  });
-  docker([
-    'pg_restore',
-    '-U',
-    dbUser,
-    '--exit-on-error',
-    '--no-owner',
-    '--dbname',
-    drillDatabase,
-    backupPath
-  ], { capture: true });
-
-  const restoredTables = count(
-    drillDatabase,
-    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-  );
-  const restoredWorlds = count(drillDatabase, 'SELECT count(*) FROM worlds');
-
-  if (sourceTables !== restoredTables || sourceWorlds !== restoredWorlds) {
-    throw new Error(
-      `restore verification mismatch (tables ${sourceTables}/${restoredTables}, worlds ${sourceWorlds}/${restoredWorlds})`
-    );
-  }
-
-  console.log(JSON.stringify({
-    passed: true,
-    sourceDatabase,
-    temporaryDatabase: drillDatabase,
-    tables: restoredTables,
-    worlds: restoredWorlds,
-    backupPath,
-    cleanup: 'temporary database and dump removed'
-  }, null, 2));
-} finally {
-  try {
-    docker(['rm', '-f', backupPath], { capture: true });
-  } catch (error) {
-    console.error(`backup file cleanup failed: ${error.message}`);
-    process.exitCode = 1;
+    failure = error instanceof BackupDrillError ? error.code : 'backup_drill_failed';
   } finally {
-    cleanup();
+    for (const session of [restoreSession, sourceSession]) {
+      if (session) try { await session.close(); } catch { cleanupFailed = true; }
+    }
+    // Recheck the original exact ID, never a replacement under the same name.
+    let scopeConfirmed = false;
+    if (containerId) try { scopeConfirmed = await readContainer(containerId) === containerId; } catch { cleanupFailed = true; }
+    if (databaseCreated) {
+      try {
+        requireBackup(scopeConfirmed, 'container_scope_changed');
+        await assertDatabaseOwned();
+        // No IF EXISTS, FORCE, prefix search, source DROP or backend termination.
+        await sql('postgres', `DROP DATABASE "${resources.database}";`);
+        requireBackup(await sql('postgres', `SELECT COUNT(*)::text FROM pg_database WHERE datname = '${resources.database}';`) === '0', 'database_cleanup_unconfirmed');
+      } catch { cleanupFailed = true; }
+    }
+    if (directoryOwned) {
+      try {
+        requireBackup(scopeConfirmed, 'container_scope_changed');
+        await assertDirectoryOwned();
+        await exec(['rm', '-f', `${directory}/backup.dump`]);
+        await exec(['rm', `${directory}/${resources.ownerFile}`]);
+        await exec(['rmdir', directory]); // Fail on unexpected contents, no rm -r.
+      } catch { cleanupFailed = true; }
+    }
+  }
+  // These are exact candidate targets for operator reconciliation, not a claim
+  // that they exist. A failed Docker acknowledgement may hide a completed write.
+  const recovery = { containerId: containerId ?? null,
+    temporaryDatabase: resources.database, privateDumpDirectory: directory ?? null };
+  if (failure || cleanupFailed) throw new BackupDrillError(cleanupFailed ? 'cleanup_unconfirmed' : failure, recovery);
+  return {
+    reportVersion: 'worldloom.backup-drill/v2', passed: true, scope: 'local-same-cluster-public-table-data',
+    sourceDatabase: options.sourceDatabase, temporaryDatabase: resources.database,
+    tables: source, usageTablePresent: usagePresent,
+    usageRestoreStatus: usagePresent ? 'row-content-compared' : 'not-present-in-source-snapshot',
+    cleanup: { temporaryDatabase: 'removed', privateDumpDirectory: 'removed', snapshotSessions: 'closed' },
+    durableBackup: false, releaseApproved: false
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    requireBackup(process.argv.slice(2).filter((value) => value !== '--').length === 0, 'unsupported_argument');
+    console.log(JSON.stringify(await runBackupRestoreDrill(), null, 2));
+  } catch (error) {
+    const safe = error instanceof BackupDrillError ? error : new BackupDrillError('backup_drill_failed');
+    console.error(JSON.stringify({ passed: false, code: safe.code, recovery: safe.recovery, releaseApproved: false }));
+    process.exitCode = 1;
   }
 }

@@ -21,12 +21,17 @@ export default defineConfig({
     trace: 'on-first-retry',
     locale: 'zh-CN'
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], channel: process.env.E2E_BROWSER_CHANNEL }
+    }
+  ],
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
         command: 'pnpm start',
-        url: 'http://localhost:4310/api/health',
+        url: 'http://localhost:4310/api/health/ready',
         reuseExistingServer: true,
         timeout: 120_000
       }
